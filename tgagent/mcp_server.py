@@ -20,7 +20,11 @@ Rules:
    local index; use tg_index_chat or tg_export for complete listings of large chats.
 4. Check count and total size with tg_plan_download before big downloads. Batches above the user's limit wait for approval
    in the console; tell the user when that happens.
-5. The service never sends messages and never joins chats."""
+5. When descriptions and files live in different chats, use tg_match_posts / tg_file_context(intro_chat=...).
+6. When unsure (several versions, ambiguous matches), ask the user with tg_ask_user instead of guessing.
+7. For long listings pass format="compact" (and fields=[...]) to save context. tg_search_archive and
+   tg_search_files search locally without Telegram requests. Write useful findings into tg_notes.
+8. The service never sends messages and never joins chats."""
 
 ListFn = Callable[[], Awaitable[list[dict]]]
 CallFn = Callable[[str, dict, str, str], Awaitable[tuple[bool, Any]]]
@@ -64,8 +68,23 @@ def build_server(list_fn: ListFn, call_fn: CallFn, name: str = "tg-agent") -> Se
         text = json.dumps(result, ensure_ascii=False, indent=1, default=str) if ok else str(result)
         return types.CallToolResult(content=[types.TextContent(text=text)], is_error=not ok)
 
+    async def on_list_prompts(ctx, params) -> types.ListPromptsResult:
+        from . import recipes
+        return types.ListPromptsResult(prompts=[
+            types.Prompt(name=p["name"], title=p["title"], description=p["description"],
+                         arguments=[types.PromptArgument(name=a["name"], description=a["description"], required=a["required"])
+                                    for a in p["arguments"]])
+            for p in recipes.prompts()])
+
+    async def on_get_prompt(ctx, params: types.GetPromptRequestParams) -> types.GetPromptResult:
+        from . import recipes
+        text = recipes.render_prompt(params.name, params.arguments or {})
+        return types.GetPromptResult(description=params.name, messages=[
+            types.PromptMessage(role="user", content=types.TextContent(text=text))])
+
     return Server(name, version=__version__, title="TG Agent", instructions=INSTRUCTIONS,
-                  on_list_tools=on_list_tools, on_call_tool=on_call_tool)
+                  on_list_tools=on_list_tools, on_call_tool=on_call_tool,
+                  on_list_prompts=on_list_prompts, on_get_prompt=on_get_prompt)
 
 
 def tool_dicts() -> list[dict]:

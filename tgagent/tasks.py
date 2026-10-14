@@ -14,7 +14,7 @@ from typing import Any
 
 from telethon.tl import types
 
-from . import index, readers
+from . import assist, index, postproc, readers
 from .accounts import manager as accounts
 from .activity import bus
 from .config import EXPORTS_DIR, TASKS_FILE, settings
@@ -368,7 +368,7 @@ class TaskManager:
 
         total = sum(fi["size"] for *_, fi in candidates)
         need_approval = (not skip_approval and source not in HUMAN_SOURCES and candidates
-                         and self._over_limit(len(candidates), total))
+                         and (self._over_limit(len(candidates), total) or assist.over_byte_quota(source, total)))
         batch = uuid.uuid4().hex[:8] if need_approval else ""
         created = []
         for entity, msg, chat_id, fi in candidates:
@@ -636,6 +636,8 @@ class TaskManager:
                 t.last_progress = time.time()
 
             def on_state(reason, until) -> None:
+                if reason == "flood" and t.wait_reason != "flood":
+                    assist.budget.flood()
                 if reason != t.wait_reason or (until or 0) != t.wait_until:
                     t.wait_reason, t.wait_until = reason or "", until or 0.0
                     self._changed(t)
@@ -680,6 +682,7 @@ class TaskManager:
             t.status = "done"
             t.wait_reason = ""
             record_download(t)
+            assist.count_bytes(t.source, t.total)
             bus.log("success", "download", L(f"下载完成：{t.title}", f"Downloaded: {t.title}"),
                     f"{readers.human_size(t.total)} · {int(time.time() - (t.started or time.time()))}s", task_id=t.id)
         except asyncio.CancelledError:
@@ -723,6 +726,57 @@ class TaskManager:
         return {"task_id": t.id, "status": "running", "output_path": str(out),
                 "hint": L("导出在后台进行，用 tg_tasks(task_ids=[...]) 查看是否完成，完成后读取 output_path",
                           "Runs in the background; check tg_tasks(task_ids=[...]) and read output_path when done")}
+
+    async def start_extract(self, source: str, task_ids: list[str] | None = None, paths: list[str] | None = None,
+                            password: str | None = None, test_only: bool = False) -> dict:
+        targets: list[Path] = []
+        for tid in task_ids or []:
+            t = self.tasks.get(tid)
+            if not t or t.kind != "download" or t.status not in ("done", "skipped"):
+                raise ValueError(L(f"任务 {tid} 不是已完成的下载", f"Task {tid} is not a finished download"))
+            targets.append(Path(t.path))
+        for pth in paths or []:
+            targets.append(Path(pth))
+        seen, jobs = set(), []
+        for pth in targets:
+            if not postproc.inside_downloads(pth):
+                raise ValueError(L(f"只能处理下载目录内的文件：{pth}", f"Only files inside the download folder can be processed: {pth}"))
+            if not pth.exists():
+                raise ValueError(L(f"文件不存在：{pth}", f"File not found: {pth}"))
+            first = postproc.first_volume(pth)
+            if first in seen:
+                continue
+            seen.add(first)
+            title = (L("校验 ", "Test ") if test_only else L("解压 ", "Extract ")) + first.name
+            t = self._new(kind="extract", account="", title=title, source=source, status="running",
+                          started=time.time(), path=str(first), total=100, params={"test_only": test_only})
+            self._start_job(t, self._run_extract(t, first, password, test_only))
+            jobs.append({"task_id": t.id, "archive": str(first)})
+        if not jobs:
+            raise ValueError(L("没有可处理的文件", "Nothing to process"))
+        return {"jobs": jobs, "hint": "Use tg_wait_tasks with these task ids; the result note says where files were extracted."}
+
+    async def _run_extract(self, t: Task, archive: Path, password: str | None, test_only: bool) -> None:
+        def prog(pct: int) -> None:
+            t.done = max(t.done, min(100, pct))
+        try:
+            ok, msg, dest = await postproc.run_7z(archive, password, test_only, prog)
+            if ok:
+                t.status, t.done = "done", 100
+                t.note = str(dest) if dest else L("校验通过", "Archive OK")
+                bus.log("success", "extract", t.title, t.note, task_id=t.id)
+            else:
+                t.status, t.error = "failed", msg
+                bus.log("error", "extract", t.title, msg, task_id=t.id)
+        except asyncio.CancelledError:
+            t.status = "canceled"
+            raise
+        except Exception as e:
+            t.status, t.error = "failed", f"{type(e).__name__}: {e}"
+        finally:
+            t.finished = time.time()
+            self._running.pop(t.id, None)
+            self._changed(t)
 
     async def start_index(self, account: str | None, source: str, chat: str, full: bool = False) -> dict:
         acc, client = await accounts.client(account)

@@ -22,6 +22,52 @@ from .config import settings
 from .db import db, dumps, loads
 from .i18n import L
 
+try:
+    db.execute("ALTER TABLE steps ADD COLUMN lanes TEXT")
+except Exception:
+    pass
+
+GENERAL = {"key": "general", "title": ""}
+_CHAT_ARGS = ("intro_chat", "chat", "chat_a", "files_chat", "chat_b")
+
+
+_lane_alias: dict[str, dict] = {}   # "c:username" -> canonical lane learnt from results
+
+
+def lane_for(value) -> dict:
+    """Canonical lane (one per chat) for a chat argument: usernames and links map to the numeric id when known."""
+    cr = readers.parse_ref(value)
+    if cr.chat is None:
+        return dict(GENERAL)
+    known = _lane_alias.get(f"c:{str(cr.chat).lower()}")
+    if known:
+        return dict(known)
+    if isinstance(cr.chat, int):
+        row = db.one("SELECT chat_id, title FROM chats WHERE chat_id=?", (cr.chat,))
+        return {"key": f"c:{cr.chat}", "title": (row or {}).get("title") or str(cr.chat)}
+    row = db.one("SELECT chat_id, title FROM chats WHERE lower(username)=?", (str(cr.chat).lower(),))
+    if row:
+        return {"key": f"c:{row['chat_id']}", "title": row["title"]}
+    return {"key": f"c:{str(cr.chat).lower()}", "title": "@" + str(cr.chat)}
+
+
+def lanes_from_args(args: dict) -> list[dict]:
+    out = []
+    for k in _CHAT_ARGS:
+        if args.get(k):
+            out.append(lane_for(args[k]))
+    for c in (args.get("chats") or [])[:2]:
+        out.append(lane_for(c))
+    for link in (args.get("links") or [])[:1] + ([args["link"]] if args.get("link") else []):
+        out.append(lane_for(link))
+    seen, uniq = set(), []
+    for ln in out:
+        if ln["key"] not in seen:
+            seen.add(ln["key"])
+            uniq.append(ln)
+    return uniq[:2]
+
+
 # The step currently executing (used by tasks.py to attach downloads to it)
 current_step: contextvars.ContextVar["Step | None"] = contextvars.ContextVar("current_step", default=None)
 
@@ -49,11 +95,12 @@ class Step:
     polls: int = 0
     ts: float = field(default_factory=time.time)
     ms: int | None = None
+    lanes: list[dict] = field(default_factory=list)
 
     def public(self, with_result: bool = False) -> dict:
         d = {"id": self.id, "workflow_id": self.workflow_id, "seq": self.seq, "tool": self.tool, "args": self.args,
              "status": self.status, "summary": self.summary, "error": self.error, "parents": self.parents,
-             "task_ids": self.task_ids, "polls": self.polls, "ts": self.ts, "ms": self.ms}
+             "task_ids": self.task_ids, "polls": self.polls, "ts": self.ts, "ms": self.ms, "lanes": self.lanes}
         if with_result:
             d["result"] = self.result
         return d
@@ -63,7 +110,8 @@ class Step:
             "id": self.id, "workflow_id": self.workflow_id, "seq": self.seq, "tool": self.tool,
             "args": dumps(self.args), "status": self.status, "summary": self.summary, "result": self.result,
             "error": self.error, "parents": dumps(self.parents), "produced": dumps(sorted(self.produced)[:5000]),
-            "task_ids": dumps(self.task_ids), "polls": self.polls, "ts": self.ts, "ms": self.ms})
+            "task_ids": dumps(self.task_ids), "polls": self.polls, "ts": self.ts, "ms": self.ms,
+            "lanes": dumps(self.lanes)})
 
 
 @dataclass
@@ -157,7 +205,7 @@ def used_refs(args: dict) -> set[str]:
     refs |= _chat_refs(args.get("chat"))
     for c in args.get("chats", []) or []:
         refs |= _chat_refs(c)
-    for k in ("chat_a", "chat_b"):
+    for k in ("chat_a", "chat_b", "intro_chat", "files_chat"):
         refs |= _chat_refs(args.get(k))
     for link in args.get("links", []) or []:
         refs |= _chat_refs(link)
@@ -271,8 +319,12 @@ class WorkflowManager:
                     break
         if not parents and wf.steps:
             parents.append({"id": wf.steps[-1].id, "kind": "seq"})
+        lanes = lanes_from_args(args)
+        if not lanes:   # e.g. waiting on tasks: belongs to the lane of the step that produced them
+            src = next((st for st in wf.steps for pp in parents if pp["kind"] == "data" and st.id == pp["id"]), None)
+            lanes = list(src.lanes[:1]) if src and src.lanes else [dict(GENERAL)]
         step = Step(id=uuid.uuid4().hex[:12], workflow_id=wf.id, seq=len(wf.steps) + 1, tool=tool,
-                    args=args, parents=parents)
+                    args=args, parents=parents, lanes=lanes)
         wf.steps.append(step)
         step.save()
         wf.save()
@@ -288,6 +340,23 @@ class WorkflowManager:
             step.status = "done"
             step.summary = summary
             step.produced |= produced_refs(result)
+            chat = result.get("chat") if isinstance(result, dict) else None
+            if isinstance(result, dict) and "title" in result and "type" in result and result.get("id") is not None:
+                chat = result
+            if isinstance(chat, dict) and chat.get("id") is not None and step.lanes and step.lanes[0]["key"] != "general":
+                old_key = step.lanes[0]["key"]
+                step.lanes[0] = {"key": f"c:{chat['id']}", "title": chat.get("title") or step.lanes[0]["title"]}
+                if old_key != step.lanes[0]["key"]:   # the argument (e.g. a username) now maps to this chat
+                    _lane_alias[old_key] = dict(step.lanes[0])
+                    for other in (wf.steps if wf else []):
+                        other.lanes = [dict(step.lanes[0]) if ln["key"] == old_key else ln for ln in other.lanes]
+                if chat.get("username"):
+                    _lane_alias[f"c:{chat['username'].lower()}"] = dict(step.lanes[0])
+                _lane_alias[f"c:{chat['id']}"] = dict(step.lanes[0])
+                for other in (wf.steps if wf else []):   # earlier steps that named the chat by username
+                    for i, ln in enumerate(other.lanes):
+                        if ln["key"] in {f"c:{str(chat.get('username') or '').lower()}"} and chat.get("username"):
+                            other.lanes[i] = dict(step.lanes[0])
             text = dumps(result)
             step.result = text if len(text) <= MAX_RESULT_CHARS else text[:MAX_RESULT_CHARS] + "…"
         else:
@@ -332,7 +401,7 @@ class WorkflowManager:
                 steps.append({**{k: r[k] for k in ("id", "workflow_id", "seq", "tool", "status", "summary",
                                                    "error", "polls", "ts", "ms")},
                               "args": loads(r["args"], {}), "parents": loads(r["parents"], []),
-                              "task_ids": loads(r["task_ids"], [])})
+                              "task_ids": loads(r["task_ids"], []), "lanes": loads(r.get("lanes"), [])})
         return {"workflow": head, "steps": steps}
 
     def step_result(self, step_id: str) -> dict | None:

@@ -9,7 +9,7 @@ from typing import Any, AsyncIterator
 from telethon import TelegramClient, utils
 from telethon.tl import functions, types
 
-from . import index
+from . import archive, index
 from .db import db as _db
 from .config import settings
 
@@ -131,17 +131,27 @@ def chat_title(entity) -> str:
     return utils.get_display_name(entity) or str(getattr(entity, "id", ""))
 
 
+def entity_username(entity) -> str | None:
+    """Public username; newer chats keep it in `usernames` (collectible / multiple usernames) instead."""
+    if getattr(entity, "username", None):
+        return entity.username
+    for u in getattr(entity, "usernames", None) or []:
+        if getattr(u, "active", False):
+            return u.username
+    return None
+
+
 def chat_brief(entity) -> dict:
     return {
         "id": utils.get_peer_id(entity),
         "title": chat_title(entity),
-        "username": getattr(entity, "username", None),
+        "username": entity_username(entity),
         "type": chat_type(entity),
     }
 
 
 def message_link(entity, msg_id: int) -> str | None:
-    username = getattr(entity, "username", None)
+    username = entity_username(entity)
     if username:
         return f"https://t.me/{username}/{msg_id}"
     if isinstance(entity, types.Channel):
@@ -374,7 +384,11 @@ async def get_messages(client: TelegramClient, chat: str, limit: int = 30, offse
     elif not oldest_first and until_dt:
         kwargs["offset_date"] = until_dt
     out, last_id, scanned = [], None, 0
+    acc_id = account_of(client)
+    chat_id = utils.get_peer_id(entity)
     async for msg in client.iter_messages(entity, **kwargs):
+        if acc_id and not isinstance(msg, types.MessageService):
+            archive.add(acc_id, chat_id, msg)
         scanned += 1
         last_id = msg.id
         if since_dt and not oldest_first and msg.date < since_dt:
@@ -394,6 +408,7 @@ async def get_messages(client: TelegramClient, chat: str, limit: int = 30, offse
             break
     else:
         last_id = None
+    archive.flush()
     return {
         "chat": chat_brief(entity), "count": len(out), "messages": out,
         "next_offset_id": last_id,
@@ -407,11 +422,15 @@ async def search_messages(client: TelegramClient, query: str, chat: str | None =
     if chat:
         return await get_messages(client, chat, limit=limit, query=query, text_max=text_max)
     out = []
+    acc_id = account_of(client)
     async for msg in client.iter_messages(None, search=query, limit=limit, wait_time=settings.get("read_wait_time")):
         ent = msg.chat
+        if acc_id and ent is not None:
+            archive.add(acc_id, utils.get_peer_id(ent), msg)
         d = message_dict(msg, ent, text_max)
         d["chat"] = chat_brief(ent) if ent else {"id": msg.chat_id}
         out.append(d)
+    archive.flush()
     return {"query": query, "scope": "global (joined chats)", "count": len(out), "messages": out}
 
 
@@ -428,6 +447,9 @@ async def get_message(client: TelegramClient, link: str | None = None, chat: str
             raise ValueError("Provide link, or chat + message_id")
         entity = await get_entity(client, chat)
     msg = await client.get_messages(entity, ids=int(message_id))
+    if msg and account_of(client):
+        archive.add(account_of(client), utils.get_peer_id(entity), msg)
+        archive.flush()
     if not msg:
         raise ValueError(f"Message {message_id} does not exist or is not accessible")
     d = message_dict(msg, entity, text_max=None)
@@ -498,6 +520,7 @@ async def iter_files(client: TelegramClient, entity, flt: FileFilter, offset_id:
     if min_id:
         kwargs["min_id"] = min_id
     acc_id = account_of(client)
+    chat_id_ = utils.get_peer_id(entity)
     try:
         async for msg in client.iter_messages(entity, **kwargs):
             if not oldest_first and flt.since and msg.date < flt.since:
@@ -505,12 +528,15 @@ async def iter_files(client: TelegramClient, entity, flt: FileFilter, offset_id:
             if oldest_first and flt.until and msg.date > flt.until:
                 return
             if acc_id:
+                if not isinstance(msg, types.MessageService):
+                    archive.add(acc_id, chat_id_, msg)
                 fi_any = file_info(msg)
                 if fi_any:
                     index.add(acc_id, entity, msg, fi_any)
             yield msg, flt.match(msg)
     finally:
         index.flush()
+        archive.flush()
 
 
 def account_of(client: TelegramClient) -> str | None:

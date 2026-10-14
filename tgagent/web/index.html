@@ -5,27 +5,27 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TG Agent</title>
 <link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="/assets/style.css">
-<script>try{const t=localStorage.getItem('tga-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="stylesheet" href="/assets/style.css?v=__V__">
+<script>try{var t=localStorage.getItem('tga-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.dataset.theme=t}catch(e){}</script>
 </head>
 <body>
 <div class="app">
   <aside class="sidebar">
     <div class="brand">
-      <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3 11.5l18-7.5-3.2 17-5.6-4-3 2.9v-4.7l8-7.6-10.2 6.2z"/></svg></div>
-      <div><div class="brand-name">TG Agent</div><div class="brand-sub">TELEGRAM × AI</div></div>
+      <div class="logo"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 11.5l18-7.5-3.2 17-5.6-4-3 2.9v-4.7l8-7.6-10.2 6.2z"/></svg></div>
+      <div><div class="brand-name">TG Agent</div><div class="brand-sub" data-i18n="brand.sub">Telegram workbench for AI</div></div>
     </div>
-    <div class="stripes"><span></span><span></span><span></span></div>
-    <div class="nav-label label" data-i18n="nav.section">Workspace</div>
     <nav id="nav">
       <a href="#workflow" data-page="workflow"><i data-icon="flow"></i><span data-i18n="page.workflow">Workflows</span><b class="nav-badge warn" id="nav-wf-badge"></b><kbd>1</kbd></a>
-      <a href="#browse" data-page="browse"><i data-icon="compass"></i><span data-i18n="page.browse">Browse</span><kbd>2</kbd></a>
-      <a href="#library" data-page="library"><i data-icon="database"></i><span data-i18n="page.library">Library</span><kbd>3</kbd></a>
-      <a href="#tasks" data-page="tasks"><i data-icon="download"></i><span data-i18n="page.tasks">Tasks</span><b class="nav-badge" id="nav-tasks-badge"></b><kbd>4</kbd></a>
-      <a href="#watches" data-page="watches"><i data-icon="eye"></i><span data-i18n="page.watches">Watches</span><b class="nav-badge warn" id="nav-watch-badge"></b><kbd>5</kbd></a>
-      <a href="#accounts" data-page="accounts"><i data-icon="user"></i><span data-i18n="page.accounts">Accounts</span><b class="nav-badge warn" id="nav-acc-badge"></b><kbd>6</kbd></a>
-      <a href="#connect" data-page="connect"><i data-icon="plug"></i><span data-i18n="page.connect">Connect AI</span><kbd>7</kbd></a>
-      <a href="#settings" data-page="settings"><i data-icon="gear"></i><span data-i18n="page.settings">Settings</span><kbd>8</kbd></a>
+      <a href="#dashboard" data-page="dashboard"><i data-icon="chart"></i><span data-i18n="page.dashboard">Dashboard</span><kbd>2</kbd></a>
+      <a href="#browse" data-page="browse"><i data-icon="compass"></i><span data-i18n="page.browse">Browse</span><kbd>3</kbd></a>
+      <a href="#library" data-page="library"><i data-icon="database"></i><span data-i18n="page.library">Library</span><kbd>4</kbd></a>
+      <a href="#tasks" data-page="tasks"><i data-icon="download"></i><span data-i18n="page.tasks">Tasks</span><b class="nav-badge" id="nav-tasks-badge"></b><kbd>5</kbd></a>
+      <a href="#recipes" data-page="recipes"><i data-icon="book"></i><span data-i18n="page.recipes">Recipes</span><kbd>6</kbd></a>
+      <a href="#watches" data-page="watches"><i data-icon="eye"></i><span data-i18n="page.watches">Watches</span><b class="nav-badge warn" id="nav-watch-badge"></b><kbd>7</kbd></a>
+      <a href="#accounts" data-page="accounts"><i data-icon="user"></i><span data-i18n="page.accounts">Accounts</span><b class="nav-badge warn" id="nav-acc-badge"></b><kbd>8</kbd></a>
+      <a href="#connect" data-page="connect"><i data-icon="plug"></i><span data-i18n="page.connect">Connect AI</span><kbd>9</kbd></a>
+      <a href="#settings" data-page="settings"><i data-icon="gear"></i><span data-i18n="page.settings">Settings</span><kbd>0</kbd></a>
     </nav>
     <div class="sidebar-foot">
       <a class="update-note" id="update-note" target="_blank"></a>
@@ -41,11 +41,11 @@
 
   <main class="main">
     <header class="topbar">
-      <div><div class="crumb label" id="page-crumb">TG AGENT</div><h1 id="page-title"></h1></div>
+      <div><div class="crumb" id="page-crumb"></div><h1 id="page-title"></h1></div>
       <div class="topbar-right">
         <div class="mini-pill warn" id="top-window" hidden><i data-icon="clock"></i><span></span></div>
-        <div class="mini-pill" id="top-active" title="running / queued"><i data-icon="download"></i><span>0 / 0</span></div>
-        <div class="speed-pill crt"><i data-icon="bolt"></i><span id="top-speed">0 KB/s</span></div>
+        <div class="mini-pill" id="top-active"><i data-icon="download"></i><span>0 / 0</span></div>
+        <div class="speed-pill"><i data-icon="bolt"></i><span id="top-speed">0 KB/s</span></div>
         <div class="acc-pill" id="top-account"></div>
       </div>
     </header>
@@ -65,6 +65,16 @@
         <div class="card wf-main" id="wf-main"></div>
         <div class="card wf-detail" id="wf-detail"></div>
       </div>
+    </section>
+
+    <!-- Dashboard -->
+    <section class="page" id="page-dashboard">
+      <div class="card-head" style="margin-bottom:14px">
+        <div class="seg small" id="dash-days"><button data-d="1" data-i18n="dash.d1">24 h</button><button data-d="7" class="on" data-i18n="dash.d7">7 days</button><button data-d="30" data-i18n="dash.d30">30 days</button></div>
+        <button class="btn ghost sm" id="dash-refresh"><i data-icon="refresh"></i><span data-i18n="dash.refresh">Refresh</span></button>
+      </div>
+      <div class="kpis" id="dash-kpis"></div>
+      <div class="dash-grid" id="dash-grid"></div>
     </section>
 
     <!-- Browse -->
@@ -89,7 +99,8 @@
         <div class="card">
           <div class="lib-search">
             <div class="row">
-              <div class="search"><i data-icon="search"></i><input id="l-q" data-i18n-ph="lib.searchPh" placeholder="Search indexed files"></div>
+              <div class="seg small" id="l-mode"><button data-m="files" class="on" data-i18n="lib.modeFiles">Files</button><button data-m="messages" data-i18n="lib.modeMsgs">Messages</button></div>
+              <div class="search"><i data-icon="search"></i><input id="l-q" data-i18n-ph="lib.searchPh" placeholder="Search"></div>
               <button class="btn primary sm" id="l-go"><i data-icon="search"></i><span data-i18n="lib.search">Search</span></button>
             </div>
             <div class="row" id="l-filters"></div>
@@ -107,7 +118,7 @@
           </div>
         </div>
       </div>
-      <div class="card" id="l-cmp-result" style="display:none"></div>
+      <div class="card" id="l-cmp-result" style="display:none;margin-top:18px"></div>
     </section>
 
     <!-- Tasks -->
@@ -116,7 +127,7 @@
       <div class="card">
         <div class="card-head">
           <div class="seg" id="t-filter">
-            <button data-s="active" class="on" data-i18n="tasks.active">Active</button><button data-s="paused" data-i18n="tasks.paused">Paused</button><button data-s="done" data-i18n="tasks.done">Done</button><button data-s="failed" data-i18n="tasks.failed">Failed</button><button data-s="jobs" data-i18n="tasks.jobs">Exports &amp; index</button><button data-s="all" data-i18n="tasks.all">All</button>
+            <button data-s="active" class="on" data-i18n="tasks.active">Active</button><button data-s="paused" data-i18n="tasks.paused">Paused</button><button data-s="done" data-i18n="tasks.done">Done</button><button data-s="failed" data-i18n="tasks.failed">Failed</button><button data-s="jobs" data-i18n="tasks.jobs">Other jobs</button><button data-s="all" data-i18n="tasks.all">All</button>
           </div>
           <div class="btn-row">
             <button class="btn ghost sm" data-bulk="pause"><i data-icon="pause"></i><span data-i18n="tasks.pauseAll">Pause all</span></button>
@@ -129,33 +140,37 @@
       </div>
     </section>
 
+    <!-- Recipes -->
+    <section class="page" id="page-recipes">
+      <div class="card intro" style="margin-bottom:18px"><h2 data-i18n="rec.title">Recipes</h2><p data-i18n="rec.intro"></p></div>
+      <div class="recipe-grid" id="r-grid"></div>
+    </section>
+
     <!-- Watches -->
     <section class="page" id="page-watches">
-      <div class="card intro" style="margin-bottom:20px">
-        <div class="card-head" style="margin:0"><div><h2 data-i18n="watch.title">Watch chats</h2><p data-i18n="watch.intro">New files that match the filter are downloaded automatically.</p></div>
+      <div class="card intro" style="margin-bottom:18px">
+        <div class="card-head" style="margin:0"><div><h2 data-i18n="watch.title">Watch chats</h2><p data-i18n="watch.intro"></p></div>
           <button class="btn primary" id="w-add"><i data-icon="plus"></i><span data-i18n="watch.add">New watch</span></button></div>
       </div>
       <div class="watch-grid" id="w-grid"></div>
     </section>
 
     <!-- Accounts -->
-    <section class="page" id="page-accounts">
-      <div class="acc-grid" id="acc-grid"></div>
-    </section>
+    <section class="page" id="page-accounts"><div class="acc-grid" id="acc-grid"></div></section>
 
     <!-- Connect -->
     <section class="page" id="page-connect">
       <div class="card intro">
         <h2 data-i18n="connect.title">Connect TG Agent to your AI tools</h2>
         <p data-i18n="connect.intro"></p>
-        <div class="label" style="margin-top:16px" data-i18n="connect.token">Access token</div>
+        <div class="label" style="margin-top:14px" data-i18n="connect.token">Access token</div>
         <div class="token-row" style="margin-top:6px"><code id="c-token">••••••••</code>
           <button class="btn sm" id="c-reveal" data-i18n="connect.reveal">Show</button>
           <button class="btn sm ghost" id="c-regen"><i data-icon="refresh"></i><span data-i18n="connect.regen">Regenerate</span></button></div>
       </div>
       <div class="connect-grid" id="connect-grid"></div>
       <div class="card">
-        <div class="card-head"><h2 data-i18n="connect.tools">Tools</h2><span class="label" id="tool-count"></span></div>
+        <div class="card-head"><h2 data-i18n="connect.tools">Tools</h2><span class="hint" id="tool-count"></span></div>
         <div class="tool-list" id="tool-list"></div>
       </div>
     </section>
@@ -180,30 +195,37 @@
               <label><span data-i18n="set.part">Part size (KB)</span><select name="part_size_kb"><option>128</option><option>256</option><option>512</option><option>1024</option></select></label>
             </div>
             <div class="row-3">
-              <label><span data-i18n="set.speedLimit">Speed limit (KB/s, 0 = unlimited)</span><input name="speed_limit_kbps" type="number" min="0"></label>
+              <label><span data-i18n="set.speedLimit">Speed limit</span><input name="speed_limit_kbps" type="number" min="0"></label>
               <label><span data-i18n="set.winStart">Download from</span><input name="download_window_start" type="time"></label>
               <label><span data-i18n="set.winEnd">until</span><input name="download_window_end" type="time"></label>
             </div>
-            <label class="check"><input type="checkbox" name="dedupe_downloads"><span data-i18n="set.dedupe">Skip files already downloaded from another chat</span></label>
+            <label class="check"><input type="checkbox" name="dedupe_downloads"><span data-i18n="set.dedupe">Skip files already downloaded</span></label>
+            <label><span data-i18n="set.sevenzip">7-Zip path</span><input name="sevenzip_path" data-i18n-ph="set.sevenzipPh" placeholder="auto"></label>
             <p class="note"><i data-icon="info"></i><span data-i18n="set.note"></span></p>
           </div>
         </div>
         <div class="set-group">
-          <div><h3 data-i18n="set.notify">Notifications &amp; updates</h3><div class="set-desc" data-i18n="set.notifyDesc"></div></div>
-          <div class="set-fields">
-            <label class="check"><input type="checkbox" id="notify-toggle"><span data-i18n="set.desktopNotify">Desktop notifications in this browser</span></label>
-            <label class="check"><input type="checkbox" name="check_updates"><span data-i18n="set.checkUpdates">Check GitHub for new versions once a day</span></label>
-          </div>
-        </div>
-        <div class="set-group">
-          <div><h3 data-i18n="set.ai">AI safeguards</h3><div class="set-desc" data-i18n="set.aiDesc"></div></div>
+          <div><h3 data-i18n="set.ai">AI limits</h3><div class="set-desc" data-i18n="set.aiDesc"></div></div>
           <div class="set-fields">
             <div class="row-3">
               <label><span data-i18n="set.apSize">Ask above (GB)</span><input name="approval_size_gb" type="number" step="0.1" min="0"></label>
               <label><span data-i18n="set.apFiles">Ask above (files)</span><input name="approval_files" type="number" min="0"></label>
               <label><span data-i18n="set.idle">Close untitled workflow after (min)</span><input name="workflow_idle_min" type="number" min="1"></label>
             </div>
-            <label><span data-i18n="set.wait">Delay between history batches (s)</span><input name="read_wait_time" type="number" step="0.1" min="0"><small data-i18n="set.waitHint"></small></label>
+            <div class="row-3">
+              <label><span data-i18n="set.dayReq">Requests per AI per day</span><input name="default_daily_requests" type="number" min="0"></label>
+              <label><span data-i18n="set.dayGb">GB per AI per day</span><input name="default_daily_gb" type="number" step="0.5" min="0"></label>
+              <label><span data-i18n="set.tgRpm">Telegram requests / min</span><input name="tg_requests_per_minute" type="number" min="0"></label>
+            </div>
+            <label><span data-i18n="set.wait">Delay between history batches (s)</span><input name="read_wait_time" type="number" step="0.1" min="0"></label>
+            <div><div class="label" data-i18n="set.agents">Connected AIs</div><div id="agent-table" style="margin-top:6px"></div></div>
+          </div>
+        </div>
+        <div class="set-group">
+          <div><h3 data-i18n="set.notify">Notifications</h3><div class="set-desc" data-i18n="set.notifyDesc"></div></div>
+          <div class="set-fields">
+            <label class="check"><input type="checkbox" id="notify-toggle"><span data-i18n="set.desktopNotify">Desktop notifications in this browser</span></label>
+            <label class="check"><input type="checkbox" name="check_updates"><span data-i18n="set.checkUpdates">Check for new versions daily</span></label>
           </div>
         </div>
         <div class="set-group">
@@ -224,8 +246,7 @@
 
 <div class="login-screen" id="login-screen">
   <div class="card login-card">
-    <div class="brand" style="padding:0"><div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3 11.5l18-7.5-3.2 17-5.6-4-3 2.9v-4.7l8-7.6-10.2 6.2z"/></svg></div><div class="brand-name">TG Agent</div></div>
-    <div class="stripes" style="padding:0"><span></span><span></span><span></span></div>
+    <div class="brand" style="padding:0"><div class="logo"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 11.5l18-7.5-3.2 17-5.6-4-3 2.9v-4.7l8-7.6-10.2 6.2z"/></svg></div><div class="brand-name">TG Agent</div></div>
     <h3 style="margin:0" data-i18n="login.title">Access token required</h3>
     <p class="muted small" style="margin:0" data-i18n="login.desc"></p>
     <form id="login-form" style="display:flex;gap:8px"><input id="login-token" class="mono" data-i18n-ph="login.ph" placeholder="token" autocomplete="off"><button class="btn primary" type="submit" data-i18n="login.go">Unlock</button></form>
@@ -233,9 +254,11 @@
 </div>
 <div class="modal-back" id="modal-back"><div class="modal" id="modal"></div></div>
 <div class="toasts" id="toasts"></div>
-<script src="/assets/core.js"></script>
-<script src="/assets/workflow.js"></script>
-<script src="/assets/pages.js"></script>
-<script src="/assets/main.js"></script>
+<script src="/assets/core.js?v=__V__"></script>
+<script src="/assets/charts.js?v=__V__"></script>
+<script src="/assets/workflow.js?v=__V__"></script>
+<script src="/assets/pages.js?v=__V__"></script>
+<script src="/assets/extra.js?v=__V__"></script>
+<script src="/assets/main.js?v=__V__"></script>
 </body>
 </html>

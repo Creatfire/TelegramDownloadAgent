@@ -18,7 +18,12 @@ Everything the AI does shows up live in a web console as a **workflow**: one car
 - 🧭 **Workflows** — every AI request grouped and drawn as a step graph you can inspect
 - 🛡 **Safe by default** — never sends messages or joins chats; large AI downloads and AI-created watches wait for your approval; local access token
 - 👥 **Multiple accounts**, per-account proxies, QR-code or code + 2FA login
-- 🌗 Dark / light theme with a restrained retro-futurist look, English / 中文
+- 🤝 **Two-channel work** — pair a channel of descriptions with the channel that hosts the files; passwords and versions are pulled out of captions and nearby posts
+- 🙋 **Asks instead of guessing** — the AI can ask you a question in the console and waits for your answer
+- 📚 **Recipes** — any workflow can be saved and re-run, scheduled, or used as a slash command in Claude Code
+- 📈 **Dashboard** — throughput, daily downloads, library make-up, per-AI usage, tool timings, Telegram request budget
+- 🗜 **Extraction** with 7-Zip (password from the post, split sets from their first volume)
+- 🌗 Calm warm-graphite light and dark themes, English / 中文
 
 ## Quick start
 
@@ -94,14 +99,24 @@ Get the token with `tg-agent token` (or from the Connect AI page).
 | `tg_search_files` | Search the local index across chats — no Telegram requests |
 | `tg_compare_chats` | What two chats have in common / only one has (by name, name+size, stem or identical file) |
 | `tg_watch` | Manage watches (AI-created ones need approval) |
+| `tg_search_archive` | Full-text search over every message the service has read or indexed — offline |
+| `tg_file_context` | A file's caption, neighbouring posts and album, with extracted passwords, versions, links; optionally the matching post in an intro chat |
+| `tg_match_posts` | Pair description posts in one chat with (indexed) files in another, split archives grouped |
+| `tg_ask_user` | Ask the user a question in the console and wait for the answer |
+| `tg_notes` | Shared notes about a chat that every AI can read (naming patterns, where passwords are posted…) |
+| `tg_list_recipes` / `tg_run_recipe` | Reusable workflows |
+| `tg_extract` | Test or extract downloaded archives with 7-Zip |
+
+Listing tools accept `format="compact"` (lists as column/row tables) and `fields=[...]` to save the AI's context.
 
 ## The workflow view
 
 - **Left:** workflows grouped by state and day; each shows the AI client, number of steps and time.
-- **Middle:** the steps of the selected workflow. Thin lines link consecutive steps; amber arcs in the margin mark **data dependencies** (a step that used a chat, message or task produced by an earlier step). Download steps list their files with live progress. Repeated progress polling doesn't add nodes; it shows as *“Progress checked ×N”*.
+- **Middle:** the steps of the selected workflow, drawn as **swim lanes — one column per chat**. When an AI reads an intro channel and works in a download channel at the same time, the steps sit side by side; a step that relates both chats (e.g. matching) spans both lanes, and dashed orange links show data flowing between chats. Each step reads as a plain sentence (“Read 30 messages”, “Match intro posts to files”); tool names and arguments live in the details panel. A short summary at the top says what the AI did in which chat.
+- **States** use one orange at different strengths: pale dashed = waiting (for you or for tasks), vivid = running, muted = done; red = error. Download steps list their files with live progress; questions from the AI can be answered right inside the step. Repeated progress polling doesn't add nodes.
 - **Right:** click a node to see its full arguments and result.
 - *Follow the latest activity* jumps to whatever the AI is doing now. The **Log** tab shows the raw event stream.
-- **Export report** saves a workflow as Markdown; **Re-run** replays its steps as a new workflow (downloads still follow the approval rules).
+- **Save as recipe** turns the workflow into a reusable template (chats become parameters); **Export report** saves it as Markdown; **Re-run** replays it (downloads still follow the approval rules).
 
 If an AI doesn't call `tg_start_workflow`, its calls are still recorded, in an *untitled workflow* per session.
 
@@ -168,8 +183,6 @@ Manual test checklist for testers (human or AI): [docs/TESTING.md](docs/TESTING.
 ## Credits
 
 Built on [Telethon](https://github.com/LonamiWebs/Telethon). Download approach inspired by [tdl](https://github.com/iyear/tdl); watch/filter ideas from [telegram_media_downloader](https://github.com/tangyoha/telegram_media_downloader).
-
-Bundled fonts (SIL Open Font License 1.1, see `tgagent/web/fonts/`): [Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font) (subset to the UI's characters — rebuild with `tools/subset_fonts.py`), [VT323](https://fonts.google.com/specimen/VT323), [Silkscreen](https://fonts.google.com/specimen/Silkscreen).
 
 ## License
 

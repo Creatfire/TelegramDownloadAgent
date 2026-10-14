@@ -45,7 +45,7 @@ Homepage = "https://github.com/Creatfire/TelegramDownloadAgent"
 packages = ["tgagent"]
 
 [tool.setuptools.package-data]
-tgagent = ["web/*", "web/fonts/*"]
+tgagent = ["web/*"]
 
 [tool.setuptools.dynamic]
 version = { attr = "tgagent.__version__" }

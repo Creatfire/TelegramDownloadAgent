@@ -1,7 +1,9 @@
 'use strict';
 /* Routing, top bar, live events (SSE) and boot. */
 
-const PAGES = ['workflow', 'browse', 'library', 'tasks', 'watches', 'accounts', 'connect', 'settings'];
+const PAGES = ['workflow', 'dashboard', 'browse', 'library', 'tasks', 'recipes', 'watches', 'accounts', 'connect', 'settings'];
+S.lib.mode = 'files';
+S.questions = [];
 
 function route() {
   const page = (location.hash || '#workflow').slice(1);
@@ -13,6 +15,8 @@ function route() {
   if (S.page === 'workflow') { renderWfList(); renderWfMain(); }
   if (S.page === 'browse') initBrowse();
   if (S.page === 'library') initLibrary();
+  if (S.page === 'dashboard') initDashboard();
+  if (S.page === 'recipes') initRecipes();
   if (S.page === 'connect') renderConnect();
   if (S.page === 'settings') fillSettings();
   render();
@@ -48,7 +52,7 @@ function renderTop() {
     : `<span class="muted">${t('acc.none')}</span>`;
   const badge = (id, n, txt) => { const b = $(id); b.textContent = txt ?? n; b.classList.toggle('show', !!n); };
   badge('#nav-tasks-badge', (st.running || 0) + (st.queued || 0));
-  badge('#nav-wf-badge', S.approvals.length);
+  badge('#nav-wf-badge', S.approvals.length + (S.questions || []).filter(qq => qq.status === 'open').length);
   badge('#nav-watch-badge', S.watches.filter(w => w.pending_approval).length);
   const needLogin = S.accounts.filter(a => a.status !== 'ready').length;
   badge('#nav-acc-badge', needLogin || !S.accounts.length ? 1 : 0, S.accounts.length ? needLogin : '!');
@@ -69,7 +73,7 @@ async function loadState() {
   S.tasks = new Map(st.tasks.map(x => [x.id, x]));
   S.activity = new Map(st.activity.map(e => [e.id, e]));
   S.workflows = new Map(st.workflows.map(w => [w.id, w]));
-  S.approvals = st.approvals; S.watches = st.watches; S.update = st.update || {};
+  S.approvals = st.approvals; S.watches = st.watches; S.update = st.update || {}; S.questions = st.questions || [];
   const tools = await api('/api/tools');
   S.toolsMeta = Object.fromEntries(tools.map(x => [x.name, x]));
   LANG = st.settings.language === 'zh' ? 'zh' : 'en';
@@ -104,6 +108,15 @@ function connectEvents() {
     onWorkflowEvent(w);
   });
   es.addEventListener('update', e => { S.update = JSON.parse(e.data); render(); });
+  es.addEventListener('question', e => {
+    const qq = JSON.parse(e.data);
+    const known = (S.questions || []).find(x => x.id === qq.id);
+    S.questions = [...(S.questions || []).filter(x => x.id !== qq.id), qq].filter(x => x.status === 'open');
+    if (!known && qq.status === 'open') notify(t('n.question'), qq.question);
+    renderApprovals();
+    if (S.page === 'workflow') renderFlow();
+    render();
+  });
   es.addEventListener('step', e => onStepEvent(JSON.parse(e.data)));
   es.addEventListener('task', e => {
     const tk = JSON.parse(e.data);
@@ -167,7 +180,7 @@ function bindGlobal() {
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') return closeModal();
     if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable || e.ctrlKey || e.metaKey || e.altKey) return;
-    const n = Number(e.key);
+    const n = e.key === '0' ? 10 : Number(e.key);
     if (n >= 1 && n <= PAGES.length) location.hash = PAGES[n - 1];
   });
   $('#login-form').onsubmit = async e => {
@@ -192,6 +205,7 @@ async function start() {
   hydrateIcons();
   $('#theme-btn').innerHTML = icon(document.documentElement.dataset.theme === 'light' ? 'moon' : 'sun');
   bindGlobal(); bindWorkflow(); bindBrowse(); bindLibrary(); bindTasks(); bindWatches(); bindAccounts(); bindConnect(); bindSettings();
+  bindDashboard(); bindRecipes(); bindAgentTable();
   try { await start(); } catch (e) { if (!$('#login-screen').classList.contains('show')) toast(e.message, false); }
   setInterval(loadAccounts, 5000);
   setInterval(() => { if (S.page === 'workflow' && S.wf.view === 'flows') renderWfList(); }, 30000);

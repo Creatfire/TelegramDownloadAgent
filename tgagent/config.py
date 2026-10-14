@@ -64,6 +64,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "dedupe_downloads": True,
     # Check GitHub for new releases once a day
     "check_updates": True,
+    # Telegram API calls per minute for reads (0 = unlimited); file downloads are governed separately
+    "tg_requests_per_minute": 120,
+    # Per-agent daily limits (0 = unlimited) and overrides {"agent name": {"daily_requests", "daily_gb", "chats", "blocked"}}
+    "default_daily_requests": 0,
+    "default_daily_gb": 0,
+    "agent_limits": {},
+    # 7-Zip executable for tg_extract (empty = auto-detect)
+    "sevenzip_path": "",
 }
 
 

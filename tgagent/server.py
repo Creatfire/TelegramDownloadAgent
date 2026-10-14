@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, auth, extras, secure
+from . import __version__, assist, auth, dashboard, extras, recipes, secure
 from .accounts import AccountError, manager as accounts
 from .activity import bus
 from .config import DATA_DIR, EXPORTS_DIR, PORT, ROOT, WEB_DIR, settings
@@ -37,7 +37,9 @@ async def lifespan(app: FastAPI):
         bus.log("warn", "system", L("未找到系统钥匙串", "No system keychain"),
                 L("api_hash 仅做了编码存储", "api_hash is only obfuscated on disk"))
     bg = [asyncio.create_task(accounts.connect_all()), asyncio.create_task(tm.run_forever()),
-          asyncio.create_task(watches.run_forever()), asyncio.create_task(extras.update_loop())]
+          asyncio.create_task(watches.run_forever()), asyncio.create_task(extras.update_loop()),
+          asyncio.create_task(recipes.schedule_loop()),
+          asyncio.create_task(assist.metrics_loop(lambda: (tm.stats()["speed"], tm.stats()["running"])))]
     async with mcp_srv.session_manager.run():
         yield
     for t in bg:
@@ -164,7 +166,8 @@ async def api_state():
         "accounts": accounts.list(), "settings": settings.all(),
         "stats": tm.stats(), "tasks": tm.list(limit=400), "approvals": tm.approvals(),
         "activity": list(bus.recent)[-200:], "workflows": workflows.list(150), "watches": watches.list(),
-        "update": extras.latest,
+        "update": extras.latest, "questions": assist.questions.pending(),
+        "budget": assist.budget.snapshot(),
         "paths": {"root": str(ROOT), "data": str(DATA_DIR), "exports": str(EXPORTS_DIR), "checkout": (ROOT / "mcp_stdio.py").exists(), "frozen": bool(getattr(sys, "frozen", False)),
                   "python": sys.executable},
     }
@@ -233,6 +236,102 @@ async def api_workflow_rerun(wf_id: str):
         return await extras.rerun_workflow(wf_id)
     except ValueError:
         raise HTTPException(404, "not found")
+
+
+@app.post("/api/workflows/{wf_id}/save_recipe")
+async def api_save_recipe(wf_id: str, body: dict):
+    d = workflows.detail(wf_id)
+    if not d:
+        raise HTTPException(404, "not found")
+    try:
+        return recipes.from_workflow(d, str(body.get("title") or d["workflow"]["title"]))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+# ---------------------------------------------------------------- questions, notes, recipes, agents
+@app.get("/api/questions")
+async def api_questions():
+    return assist.questions.pending()
+
+
+@app.post("/api/questions/{qid}")
+async def api_answer(qid: str, body: dict):
+    if body.get("dismiss"):
+        assist.questions.dismiss(qid)
+        return {"ok": True}
+    return assist.questions.answer(qid, str(body.get("answer", "")))
+
+
+@app.get("/api/notes")
+async def api_notes():
+    return assist.all_notes()
+
+
+@app.post("/api/notes")
+async def api_note_set(body: dict):
+    acc = accounts.get(body.get("account"))
+    return assist.set_note(acc.id, int(body["chat_id"]), str(body.get("chat_title", "")), str(body.get("text", "")), "console")
+
+
+@app.delete("/api/notes/{account}/{chat_id}")
+async def api_note_delete(account: str, chat_id: int):
+    assist.delete_note(account, chat_id)
+    return {"ok": True}
+
+
+@app.get("/api/recipes")
+async def api_recipes():
+    return recipes.list_recipes()
+
+
+@app.post("/api/recipes/{rid}/run")
+async def api_recipe_run(rid: str, body: dict):
+    try:
+        return await recipes.run(rid, body.get("params") or {}, agent="console-recipe")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.patch("/api/recipes/{rid}")
+async def api_recipe_update(rid: str, body: dict):
+    try:
+        return recipes.update(rid, **body)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.delete("/api/recipes/{rid}")
+async def api_recipe_delete(rid: str):
+    recipes.delete(rid)
+    return {"ok": True}
+
+
+@app.get("/api/agents")
+async def api_agents():
+    return assist.agents_overview()
+
+
+@app.post("/api/agents/{name}/limits")
+async def api_agent_limits(name: str, body: dict):
+    limits = dict(settings.get("agent_limits") or {})
+    limits[name] = {k: body[k] for k in ("daily_requests", "daily_gb", "chats", "blocked") if k in body}
+    settings.update({"agent_limits": limits})
+    return assist.limits_for(name)
+
+
+@app.get("/api/dashboard")
+async def api_dashboard(days: int = 7):
+    return dashboard.build(get_tasks(), max(1, min(days, 90)))
+
+
+@app.post("/api/tasks/extract")
+async def api_extract(body: dict):
+    try:
+        return await get_tasks().start_extract("console", body.get("task_ids"), body.get("paths"),
+                                               body.get("password"), bool(body.get("test_only")))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.post("/api/update/check")
@@ -424,6 +523,13 @@ async def api_open(body: dict):
 app.mount("/assets", StaticFiles(directory=WEB_DIR), name="assets")
 
 
+_INDEX_HTML: str | None = None
+
+
 @app.get("/")
 async def index():
-    return FileResponse(WEB_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+    global _INDEX_HTML
+    if _INDEX_HTML is None:   # cache-bust the assets with the version so updates load immediately
+        _INDEX_HTML = (WEB_DIR / "index.html").read_text("utf-8").replace("__V__", __version__)
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(_INDEX_HTML, headers={"Cache-Control": "no-cache"})

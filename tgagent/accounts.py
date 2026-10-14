@@ -30,6 +30,19 @@ class AccountError(Exception):
     pass
 
 
+class CountingClient(TelegramClient):
+    """TelegramClient that passes every API call through the shared request budget (and counts FloodWaits)."""
+
+    async def _call(self, sender, request, ordered=False, flood_sleep_threshold=None):
+        from .assist import budget
+        await budget.acquire()
+        try:
+            return await super()._call(sender, request, ordered=ordered, flood_sleep_threshold=flood_sleep_threshold)
+        except FloodWaitError:
+            budget.flood()
+            raise
+
+
 def proxy_to_telethon(proxy: dict | None) -> dict | None:
     if not proxy or not proxy.get("type") or not proxy.get("host"):
         return None
@@ -197,7 +210,7 @@ class AccountManager:
 
     # ---------- connection and login
     def _make_client(self, acc: Account) -> TelegramClient:
-        return TelegramClient(
+        return CountingClient(
             self._session_path(acc.id), acc.api_id, acc.api_hash,
             proxy=proxy_to_telethon(acc.effective_proxy()),
             device_model="TG Agent", system_version="Desktop", app_version=__version__,

@@ -9,7 +9,7 @@ from typing import Any, Awaitable, Callable
 
 from telethon.errors import FloodWaitError, RPCError
 
-from . import index, readers
+from . import archive, assist, index, insight, readers, recipes
 from .accounts import AccountError, manager as accounts
 from .activity import bus
 from .config import settings
@@ -31,6 +31,36 @@ FILE_FILTERS = {
     "until": {"type": "string", "description": "End date, ISO."},
 }
 FILTER_KEYS = list(FILE_FILTERS)
+OUTPUT_OPTS = {
+    "format": {"type": "string", "enum": ["json", "compact"], "default": "json",
+               "description": "compact = lists as {columns, rows} tables; saves a lot of context for long listings"},
+    "fields": {"type": "array", "items": {"type": "string"},
+               "description": "Keep only these fields in list items (e.g. [\"message_id\",\"name\",\"size\"])"},
+}
+LIST_KEYS = ("files", "messages", "dialogs", "tasks", "chats", "watches", "pairs", "sample", "recipes", "notes")
+
+
+def shape_output(result, fields=None, fmt="json"):
+    """Trim list items to `fields` and/or turn lists of dicts into compact column/row tables."""
+    if not isinstance(result, dict) or (not fields and fmt != "compact"):
+        return result
+    out = dict(result)
+    for key in LIST_KEYS:
+        items = out.get(key)
+        if not isinstance(items, list) or not items or not all(isinstance(x, dict) for x in items):
+            continue
+        if fields:
+            items = [{k: x.get(k) for k in fields if k in x} for x in items]
+        if fmt == "compact":
+            cols = []
+            for x in items:
+                for k, v in x.items():
+                    if k not in cols and not isinstance(v, (dict, list)):
+                        cols.append(k)
+            out[key] = {"columns": cols, "rows": [[x.get(c) for c in cols] for x in items]}
+        else:
+            out[key] = items
+    return out
 
 
 @dataclass
@@ -107,8 +137,13 @@ async def h_dialogs(args, ctx):
 
 
 async def h_resolve(args, ctx):
-    _, c = await _client(args)
-    return await readers.resolve_chat(c, args["chat"])
+    acc, c = await _client(args)
+    res = await readers.resolve_chat(c, args["chat"])
+    if res.get("id") is not None:
+        n = assist.get_note(acc.id, res["id"])
+        if n:
+            res["chat_note"] = n["text"]
+    return res
 
 
 async def h_messages(args, ctx):
@@ -174,6 +209,73 @@ async def h_tasks(args, ctx):
 
 async def h_control(args, ctx):
     return await get_tasks().control(args["action"], args.get("task_ids"), bool(args.get("all")), ctx.source)
+
+
+async def h_search_archive(args, ctx):
+    chat_ids = []
+    for ch in args.get("chats", []) or []:
+        _, c = await _client(args)
+        chat_ids.append(readers.utils.get_peer_id(await readers.get_entity(c, ch)))
+    res = archive.search(args.get("account"), args.get("query", ""), chat_ids or None, args.get("since"),
+                         args.get("until"), args.get("limit", 30))
+    res["note"] = "Searched the local message archive only (messages the service has already read or indexed)."
+    return res
+
+
+async def h_file_context(args, ctx):
+    acc, c = await _client(args)
+    return await insight.file_context(c, acc.id, args.get("link"), args.get("chat"), args.get("message_id"),
+                                      args.get("around", 6), args.get("intro_chat"))
+
+
+async def h_match_posts(args, ctx):
+    acc, c = await _client(args)
+    return await insight.match_posts(c, acc.id, args["intro_chat"], args["files_chat"], args.get("posts", 30),
+                                     args.get("min_score", 0.35), args.get("per_post", 3), args.get("query", ""))
+
+
+async def h_ask(args, ctx):
+    from .workflow import current_step as cs
+    st = cs.get()
+    return await assist.questions.ask(ctx.source, args["question"], args.get("options"), bool(args.get("allow_text")),
+                                      args.get("timeout_s", 600), st.workflow_id if st else "", st.id if st else "")
+
+
+async def h_notes(args, ctx):
+    action = args.get("action", "get")
+    acc, c = await _client(args)
+    if action == "list":
+        return {"notes": [{"chat_id": n["chat_id"], "chat": n["chat_title"], "text": n["text"][:500], "author": n["author"]}
+                          for n in assist.all_notes(acc.id)]}
+    if not args.get("chat"):
+        raise ValueError("chat is required")
+    ent = await readers.get_entity(c, args["chat"])
+    cid = readers.utils.get_peer_id(ent)
+    if action == "get":
+        n = assist.get_note(acc.id, cid)
+        return {"chat": readers.chat_brief(ent), "note": n["text"] if n else "", "author": n["author"] if n else None}
+    if action == "delete":
+        assist.delete_note(acc.id, cid)
+        return {"deleted": True}
+    if not args.get("text"):
+        raise ValueError("text is required")
+    n = assist.set_note(acc.id, cid, readers.chat_title(ent), args["text"], ctx.source, append=action == "append")
+    return {"chat": readers.chat_brief(ent), "note": n["text"]}
+
+
+async def h_recipes(args, ctx):
+    return {"recipes": [{"name": r["name"], "title": r["title"], "description": r["description"],
+                         "params": r["params"], "steps": [s["tool"] for s in r["steps"]], "schedule": r["schedule"]}
+                        for r in recipes.list_recipes()]}
+
+
+async def h_run_recipe(args, ctx):
+    return await recipes.run(args["name"], args.get("params") or {}, agent=ctx.source)
+
+
+async def h_extract(args, ctx):
+    return await get_tasks().start_extract(ctx.source, args.get("task_ids"), args.get("paths"), args.get("password"),
+                                           bool(args.get("test_only")))
 
 
 async def h_index_chat(args, ctx):
@@ -408,7 +510,68 @@ TOOLS: list[Tool] = [
                          "subdir": {"type": "string"}},
           "required": ["action"]},
          h_watch, lambda r: str(len(r["watches"])) if "watches" in r else r.get("chat_title", r.get("id", "")), read_only=False),
+    Tool("tg_search_archive", "搜索消息存档", "Search message archive",
+         "Full-text search over messages the service has already read or indexed (titles, versions, passwords, "
+         "descriptions) WITHOUT contacting Telegram. Use tg_index_chat on a chat to archive all of its messages.",
+         {"properties": {"account": ACCOUNT, "query": {"type": "string"}, "chats": {"type": "array", "items": {"type": "string"}},
+                         "since": {"type": "string"}, "until": {"type": "string"},
+                         "limit": {"type": "integer", "default": 30, "maximum": 200}},
+          "required": ["query"]},
+         h_search_archive, lambda r: L(f"{r['count']} 条存档消息", f"{r['count']} archived messages")),
+    Tool("tg_file_context", "文件上下文", "File context",
+         "Everything around one file message: its caption, neighbouring posts and album items, plus extracted "
+         "passwords, versions, links and sizes. With intro_chat, also finds the matching description post in that "
+         "chat. Use it before downloading or extracting archives.",
+         {"properties": {"account": ACCOUNT, "link": {"type": "string"}, "chat": CHAT, "message_id": {"type": "integer"},
+                         "around": {"type": "integer", "default": 6, "maximum": 20},
+                         "intro_chat": {"type": "string", "description": "Chat whose posts describe the files"}}},
+         h_file_context, lambda r: ((r.get("file") or {}).get("name", "") + (" · 🔑" if (r.get("info") or {}).get("passwords")
+                                                                              or (r.get("info_from_nearby") or {}).get("passwords") else ""))),
+    Tool("tg_match_posts", "介绍帖配对", "Match posts to files",
+         "Pair description posts in intro_chat with files in files_chat (which must be indexed). Split archives are "
+         "grouped. Returns, per post, the best matching files with a score, message ids and any passwords/versions "
+         "found in the post. Typical use: one channel announces/describes, another hosts the downloads.",
+         {"properties": {"account": ACCOUNT, "intro_chat": CHAT, "files_chat": CHAT,
+                         "posts": {"type": "integer", "default": 30, "maximum": 300, "description": "How many recent intro posts"},
+                         "query": {"type": "string", "description": "Only posts containing this text"},
+                         "min_score": {"type": "number", "default": 0.35}, "per_post": {"type": "integer", "default": 3}},
+          "required": ["intro_chat", "files_chat"]},
+         h_match_posts, lambda r: L(f"配对 {r.get('matched', 0)} / {r.get('posts_checked', 0)} 条", f"{r.get('matched', 0)} of {r.get('posts_checked', 0)} posts matched")),
+    Tool("tg_ask_user", "询问用户", "Ask the user",
+         "Ask the user a question in the TG Agent console and wait for the answer (e.g. which of two versions to "
+         "download). Give options when possible. Returns the answer, or answered=false after timeout_s.",
+         {"properties": {"question": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}},
+                         "allow_text": {"type": "boolean", "description": "Also allow a free-text answer"},
+                         "timeout_s": {"type": "integer", "default": 600, "maximum": 3600}},
+          "required": ["question"]},
+         h_ask, lambda r: str(r.get("answer") or L("未回答", "no answer"))[:60]),
+    Tool("tg_notes", "频道笔记", "Chat notes",
+         "Shared, persistent notes about a chat for every agent and the user (naming patterns, where passwords are "
+         "posted, which channel holds the files…). action=get|set|append|delete|list. tg_resolve_chat returns the note too.",
+         {"properties": {"action": {"type": "string", "enum": ["get", "set", "append", "delete", "list"]},
+                         "account": ACCOUNT, "chat": CHAT, "text": {"type": "string"}},
+          "required": ["action"]},
+         h_notes, lambda r: (r.get("note") or "")[:40], read_only=False),
+    Tool("tg_list_recipes", "列出配方", "List recipes",
+         "Reusable workflows (built-in and saved by the user) with their parameters.",
+         {}, h_recipes, lambda r: L(f"{len(r['recipes'])} 个配方", f"{len(r['recipes'])} recipes")),
+    Tool("tg_run_recipe", "运行配方", "Run recipe",
+         "Run a recipe by name with parameters. It runs in the background as its own workflow and returns its workflow_id.",
+         {"properties": {"name": {"type": "string"}, "params": {"type": "object"}}, "required": ["name"]},
+         h_run_recipe, lambda r: r.get("recipe", ""), read_only=False),
+    Tool("tg_extract", "解压 / 校验", "Extract or test archives",
+         "Test or extract downloaded archives with 7-Zip (split sets start from their first volume). Pass finished "
+         "download task_ids or paths inside the download folder, and the password if there is one (see tg_file_context). "
+         "Runs as background tasks; use tg_wait_tasks.",
+         {"properties": {"task_ids": {"type": "array", "items": {"type": "string"}},
+                         "paths": {"type": "array", "items": {"type": "string"}},
+                         "password": {"type": "string"}, "test_only": {"type": "boolean"}}},
+         h_extract, lambda r: L(f"{len(r['jobs'])} 个解压任务", f"{len(r['jobs'])} job(s)"), read_only=False),
 ]
+for _t in TOOLS:   # every listing tool accepts the output-shaping options
+    if _t.name in ("tg_list_dialogs", "tg_get_messages", "tg_search_messages", "tg_list_files", "tg_tasks",
+                   "tg_search_files", "tg_search_archive", "tg_match_posts", "tg_plan_download", "tg_index_status"):
+        _t.schema.setdefault("properties", {}).update(OUTPUT_OPTS)
 TOOL_MAP = {t.name: t for t in TOOLS}
 
 
@@ -429,7 +592,15 @@ async def call_tool(name: str, args: dict | None, source: str = "agent", session
     if not tool:
         return False, f"Unknown tool: {name}"
     args = {k: v for k, v in (args or {}).items() if v is not None}
+    fields, fmt = args.pop("fields", None), args.pop("format", "json")
     ctx = Ctx(source=source, session_id=session_id or f"{transport}:{source}", transport=transport)
+    if transport != "console":
+        try:
+            assist.check_request(source, [args.get(k) for k in ("chat", "chat_a", "chat_b", "intro_chat", "files_chat")])
+        except assist.QuotaError as e:
+            bus.log("warn", source, tool.title, str(e), tool=name)
+            return False, str(e)
+        assist.count_request(source)
     workflows.touch_session(ctx.session_id, source, transport)
 
     wf = step = None
@@ -443,7 +614,7 @@ async def call_tool(name: str, args: dict | None, source: str = "agent", session
     t0 = time.time()
     msg: str
     try:
-        result = await tool.handler(args, ctx)
+        result = shape_output(await tool.handler(args, ctx), fields, fmt)
         summary = ""
         try:
             summary = tool.summarize(result)

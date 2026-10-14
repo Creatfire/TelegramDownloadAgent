@@ -58,8 +58,9 @@ function renderChat() {
     <div class="chat-head">${avatar(i.title)}<div style="flex:1;min-width:0"><div class="chat-title">${esc(i.title)}</div>
       <div class="chat-meta">${t('type.' + i.type)} · ${i.username ? '@' + esc(i.username) : t('browse.private')}${i.members ? ' · ' + t('browse.members', { n: i.members }) : ''}${i.latest_message_id ? ' · ' + t('browse.latest', { n: i.latest_message_id }) : ''} · ${i.id}</div>
       ${i.about ? `<div class="chat-about">${esc(i.about)}</div>` : ''}</div>
-      <div class="btn-row"><button class="btn sm" id="b-index">${icon('database')}${t('browse.index')}</button><button class="btn sm" id="b-export">${icon('export')}${t('browse.export')}</button>
+      <div class="btn-row"><button class="btn sm ghost" id="b-note">${icon('note')}${t('note.button')}</button><button class="btn sm" id="b-index">${icon('database')}${t('browse.index')}</button><button class="btn sm" id="b-export">${icon('export')}${t('browse.export')}</button>
         ${i.link ? `<a class="btn sm ghost" href="${esc(i.link)}" target="_blank">${icon('external')}${t('browse.openTg')}</a>` : ''}</div></div>
+    ${i.chat_note ? `<div class="chat-note">${icon('note')} ${esc(i.chat_note)}</div>` : ''}
     <div class="chat-tabs">
       <div class="seg" id="b-tab"><button data-t="files" class="${b.tab === 'files' ? 'on' : ''}">${t('browse.files')}</button><button data-t="msgs" class="${b.tab === 'msgs' ? 'on' : ''}">${t('browse.msgs')}</button></div>
       ${b.tab === 'files' ? `<div class="filters">${chips}
@@ -72,13 +73,13 @@ function renderChat() {
   renderBody();
 }
 function fileTable(files, opts = {}) {
-  return `<table class="file-table"><thead><tr>${opts.select ? '<th style="width:30px"></th>' : ''}<th>${t('col.name')}</th>${opts.chat ? `<th>${t('col.chat')}</th>` : ''}<th style="width:96px">${t('col.size')}</th><th style="width:136px">${t('col.date')}</th><th style="width:84px">${t('col.msg')}</th><th style="width:40px"></th></tr></thead><tbody>
+  return `<table class="file-table"><thead><tr>${opts.select ? '<th style="width:30px"></th>' : ''}<th>${t('col.name')}</th>${opts.chat ? `<th>${t('col.chat')}</th>` : ''}<th style="width:96px">${t('col.size')}</th><th style="width:136px">${t('col.date')}</th><th style="width:84px">${t('col.msg')}</th><th style="width:72px"></th></tr></thead><tbody>
     ${files.map(f => `<tr data-mid="${f.message_id}" data-link="${esc(f.link || '')}">${opts.select ? `<td><input type="checkbox" ${S.b.selected.has(f.message_id) ? 'checked' : ''}></td>` : ''}
       <td><div class="fname">${kindIco(f.kind)}<span class="n" title="${esc(f.name)}${f.caption ? '\n\n' + esc(f.caption) : ''}">${esc(f.name)}</span>${fileTags(f)}</div></td>
       ${opts.chat ? `<td class="muted small">${esc(f.chat || '')}</td>` : ''}
       <td class="num">${size(f.size)}</td><td class="num muted">${dateStr(f.date)}</td>
       <td>${f.link ? `<a href="${esc(f.link)}" target="_blank" class="mono">#${f.message_id}</a>` : '#' + f.message_id}</td>
-      <td><button class="icon-btn" data-dl="${f.message_id}" title="Download">${icon('download')}</button></td></tr>`).join('')}</tbody></table>`;
+      <td style="white-space:nowrap">${opts.chat ? '' : `<button class="icon-btn" data-ctx="${f.message_id}" title="${esc(t('ctx.button'))}">${icon('key')}</button>`}<button class="icon-btn" data-dl="${f.message_id}" title="Download">${icon('download')}</button></td></tr>`).join('')}</tbody></table>`;
 }
 function renderBody() {
   const b = S.b, body = $('#b-body');
@@ -187,6 +188,9 @@ function bindBrowse() {
     if (el.closest('#more-msgs')) return loadMsgs(true);
     if (el.closest('#b-export')) return exportModal();
     if (el.closest('#b-index')) return indexModal(String(b.chat));
+    if (el.closest('#b-note')) return noteModal(b.account, b.info.id, b.info.title);
+    const cx = el.closest('[data-ctx]');
+    if (cx) return contextModal(b.account, b.chat, cx.dataset.ctx);
     const dl = el.closest('[data-dl]');
     if (dl) return downloadIds([Number(dl.dataset.dl)]);
     if (el.closest('#sel-all')) { const all = b.files.every(f => b.selected.has(f.message_id)); b.files.forEach(f => all ? b.selected.delete(f.message_id) : b.selected.add(f.message_id)); renderBody(); return; }
@@ -238,6 +242,19 @@ function renderLibResults() {
 }
 async function runLibSearch() {
   const L = S.lib;
+  if (L.mode === 'messages') {
+    const args = { query: $('#l-q').value.trim(), limit: 100 };
+    const chat = $('#l-chat')?.value;
+    if (chat) args.chats = [chat];
+    if (!args.query) return;
+    try {
+      const r = await tool('tg_search_archive', args);
+      $('#l-results').innerHTML = r.messages.length ? r.messages.map(m => `<div class="msg"><div class="msg-head"><span>${esc(m.chat || m.chat_id)}</span><span>${dateStr(m.date)}</span>
+        ${m.link ? `<a href="${esc(m.link)}" target="_blank">#${m.message_id}</a>` : ''}${m.file_name ? `<span>${icon('file')} ${esc(m.file_name)}</span>` : ''}</div>
+        <div class="msg-text">${esc(m.text)}</div></div>`).join('') : `<div class="empty">${t('browse.none')}</div>`;
+    } catch (e) { toast(e.message, false); }
+    return;
+  }
   L.q = $('#l-q').value.trim(); L.ext = $('#l-ext').value.trim(); L.min = $('#l-min').value; L.max = $('#l-max').value;
   L.chat = $('#l-chat').value; L.sort = $('#l-sort').value;
   const args = { query: L.q, sort: L.sort, limit: 200 };
@@ -263,6 +280,13 @@ async function runCompare() {
 }
 function bindLibrary() {
   $('#l-go').onclick = runLibSearch;
+  $('#l-mode').onclick = e => {
+    const m = e.target.dataset.m; if (!m) return;
+    S.lib.mode = m; $$('#l-mode button').forEach(b => b.classList.toggle('on', b === e.target));
+    $('#l-q').placeholder = m === 'messages' ? t('lib.msgPh') : t('lib.searchPh');
+    $('#l-results').innerHTML = m === 'messages' ? `<div class="empty">${t('lib.msgEmpty')}</div>` : '';
+    if (m === 'files') renderLibResults();
+  };
   $('#l-q').onkeydown = e => { if (e.key === 'Enter') runLibSearch(); };
   $('#l-filters').addEventListener('click', e => { const c = e.target.closest('.chip'); if (!c) return; const k = c.dataset.type; S.lib.types = S.lib.types.includes(k) ? S.lib.types.filter(x => x !== k) : [...S.lib.types, k]; c.classList.toggle('on'); });
   $('#l-filters').addEventListener('keydown', e => { if (e.key === 'Enter') runLibSearch(); });
@@ -297,14 +321,16 @@ function renderTasks() {
     if (tk.status === 'paused') acts.push(['resume', 'play']);
     if (dl && (tk.status === 'failed' || tk.status === 'canceled')) acts.push(['retry', 'retry']);
     if ((tk.status === 'done' || tk.status === 'skipped') && tk.path) acts.push(['open', 'folder']);
+    if (dl && (tk.status === 'done' || tk.status === 'skipped') && ARCHIVE_RE.test(tk.title)) acts.unshift(['extract', 'box']);
     if (['approval', 'running', 'queued', 'paused'].includes(tk.status)) acts.push(['cancel', 'x', 'danger']);
     else acts.push(['remove', 'trash', 'danger']);
     return `<div class="task" data-id="${tk.id}">
-      ${dl ? kindIco(tk.file_kind) : `<span class="kind-ico kind-document">${icon(tk.kind === 'index' ? 'database' : 'export')}</span>`}
+      ${dl ? kindIco(tk.file_kind) : `<span class="kind-ico kind-document">${icon(tk.kind === 'index' ? 'database' : tk.kind === 'extract' ? 'box' : 'export')}</span>`}
       <div style="min-width:0"><div class="task-name" title="${esc(tk.path)}">${esc(tk.title)}</div>
         <div class="task-sub">${esc(tk.chat_title)} · ${who(tk.source)} · ${clock(tk.created)}${tk.error ? ` · <span class="err">${esc(tk.error)}</span>` : ''}${tk.note ? ` · ${esc(tk.note)}` : ''}</div></div>
       <div class="task-prog">${dl
         ? `<span class="num">${size(tk.done)} / ${size(tk.total)} · ${p.toFixed(1)}%</span><div class="bar ${tk.status}"><div style="width:${p}%"></div></div>`
+        : tk.kind === 'extract' ? `<span class="num">${tk.done}%</span><div class="bar ${tk.status}"><div style="width:${tk.done}%"></div></div>`
         : `<span class="num">${t('tasks.scanned', { n: tk.done })}</span><div class="bar ${tk.status}"><div style="width:${tk.status === 'done' ? 100 : 50}%"></div></div>`}</div>
       <div class="task-speed">${waitText(tk) ? `<span class="tag warn">${esc(waitText(tk))}</span>`
         : tk.status === 'running' && dl ? `<div class="num">${size(tk.speed)}/s</div><div class="eta">${tk.eta != null ? dur(tk.eta) : ''}</div>` : taskTag(tk.status)}</div>
@@ -322,6 +348,7 @@ function bindTasks() {
     const btn = e.target.closest('[data-act]'); if (!btn) return;
     const id = btn.closest('.task').dataset.id, act = btn.dataset.act;
     try {
+      if (act === 'extract') return extractModal([id]);
       if (act === 'open') await post('/api/open', { path: S.tasks.get(id).path });
       else { await post('/api/tasks/control', { action: act, task_ids: [id] }); if (act === 'remove') { S.tasks.delete(id); render(); } }
     } catch (err) { toast(err.message, false); }
@@ -570,7 +597,9 @@ function bindConnect() {
 function fillSettings() {
   const f = $('#settings-form'), s = S.settings;
   for (const k of ['language', 'download_dir', 'name_template', 'max_concurrent_files', 'connections_per_file', 'read_wait_time', 'approval_size_gb', 'approval_files',
-                   'speed_limit_kbps', 'download_window_start', 'download_window_end']) f.elements[k].value = s[k] ?? '';
+                   'speed_limit_kbps', 'download_window_start', 'download_window_end', 'sevenzip_path',
+                   'default_daily_requests', 'default_daily_gb', 'tg_requests_per_minute']) f.elements[k].value = s[k] ?? '';
+  renderAgentTable();
   f.elements.dedupe_downloads.checked = s.dedupe_downloads !== false;
   f.elements.check_updates.checked = s.check_updates !== false;
   $('#notify-toggle').checked = notifyEnabled();
@@ -600,6 +629,8 @@ function bindSettings() {
       speed_limit_kbps: Number(f.speed_limit_kbps.value || 0),
       download_window_start: f.download_window_start.value || '', download_window_end: f.download_window_end.value || '',
       dedupe_downloads: f.dedupe_downloads.checked, check_updates: f.check_updates.checked,
+      sevenzip_path: f.sevenzip_path.value.trim(), default_daily_requests: Number(f.default_daily_requests.value || 0),
+      default_daily_gb: Number(f.default_daily_gb.value || 0), tg_requests_per_minute: Number(f.tg_requests_per_minute.value || 0),
       default_proxy: f.proxy_type.value ? { type: f.proxy_type.value, host: f.proxy_host.value || '127.0.0.1', port: Number(f.proxy_port.value || 7890) } : { type: '' },
     };
     try { S.settings = await post('/api/settings', body); setLang(S.settings.language); toast(t('set.saved')); fillSettings(); } catch (err) { toast(err.message, false); }
