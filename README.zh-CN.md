@@ -10,12 +10,15 @@ AI 做的每件事都会以 **工作流** 的形式实时显示在 Web 控制台
 
 - 🔍 **读取**：消息记录、搜索、按类型/文件名/扩展名/大小/日期筛选文件，查看邀请链接
 - 🗂 **本地索引**：离线搜索、对比多个频道，不请求 Telegram
-- ⚡ **高速下载**：每个文件多条 MTProto 连接，断点续传，自动应对 FloodWait
+- ⚡ **高速下载**：每个文件多条 MTProto 连接，断点续传；并发数会根据 Telegram 限流自动调整
+- 🗜 **分卷压缩包**：识别 `x.7z.001…`、`x.part1.rar` 等分卷，下载其中一卷会自动补齐整套，并标出缺失的卷
+- ♻ **不重复下载**：已从其他频道下载过的同一文件会自动跳过
+- ⏱ **限速与下载时段**、桌面通知、系统托盘图标（Windows）、新版本提醒
 - 👁 **订阅**：自动下载频道里符合条件的新文件
 - 🧭 **工作流**：AI 的每个请求按步骤画成流程图，可逐步查看参数和结果
 - 🛡 **默认安全**：不发消息、不加群；AI 发起的大批量下载和 AI 创建的订阅需要你批准；本地访问令牌
 - 👥 **多账号**，每个账号可单独设代理，支持扫码登录或验证码 + 两步验证
-- 🌗 深色 / 浅色主题，中文 / English
+- 🌗 深色 / 浅色主题，克制的复古未来主义界面，中文 / English
 
 ## 快速开始
 
@@ -77,8 +80,10 @@ pip 安装时用 `command = "tg-agent-mcp"`；使用 exe 时为 `command = "...\
 | `tg_get_message` | 读取单条消息全文（含相册） |
 | `tg_list_files` | 文件元数据、筛选、数量和总大小（同时写入本地索引） |
 | `tg_export` | 后台导出全部文件清单或消息为 csv / json / jsonl / md |
-| `tg_download` | 按链接、消息 ID 或筛选条件加入下载 |
-| `tg_tasks` / `tg_task_control` | 进度、速度、剩余时间；暂停 / 继续 / 重试 / 取消 |
+| `tg_plan_download` | 下载预估：文件数、总大小、分卷套数与缺失卷、已下载过的文件、是否需要批准、预计耗时 |
+| `tg_download` | 按链接、消息 ID 或筛选条件加入下载（默认自动补齐分卷） |
+| `tg_wait_tasks` | 等待任务完成并推送进度，不再需要反复轮询 |
+| `tg_tasks` / `tg_task_control` | 进度、速度、剩余时间、等待原因；暂停 / 继续 / 重试 / 取消 |
 | `tg_index_chat` / `tg_index_status` | 把整个对话（增量）索引到本地 SQLite |
 | `tg_search_files` | 跨对话搜索本地索引，不请求 Telegram |
 | `tg_compare_chats` | 两个对话共有 / 独有的文件（按文件名、文件名+大小、去扩展名、同一文件） |
@@ -90,12 +95,17 @@ pip 安装时用 `command = "tg-agent-mcp"`；使用 exe 时为 `command = "...\
 - **中间**：选中工作流的步骤。细线连接相邻步骤，左侧琥珀色弧线表示 **数据依赖**（某一步用了前面某一步产出的频道、消息或任务）。下载步骤下方列出文件和实时进度。反复查询进度不会产生新节点，只显示“已查询进度 ×N”。
 - **右栏**：点击节点查看完整参数和结果。
 - 勾选“自动跟随最新活动”会自动跳到 AI 正在执行的工作流；「日志」标签显示原始事件流。
+- 「导出报告」把工作流保存为 Markdown；「重跑」按原参数重新执行全部步骤（下载仍遵守批准规则）。
 
 AI 没有调用 `tg_start_workflow` 时，调用仍会被记录，归入该会话的“未命名工作流”。
 
 ## 下载速度
 
-每个文件通过多条 MTProto 连接并行下载（同 [tdl](https://github.com/iyear/tdl) 的思路），写入预分配的 `.part` 文件并记录已完成分片，暂停、重启、断线后都能续传。默认同时 2 个文件 × 每个 4 条连接；并发越高越容易触发 Telegram 的 FloodWait 限流（会自动等待）。
+每个文件通过多条 MTProto 连接并行下载（同 [tdl](https://github.com/iyear/tdl) 的思路），写入预分配的 `.part` 文件并记录已完成分片，暂停、重启、断线后都能续传。
+
+Telegram 会限制单个账号的文件请求频率。设置里的并发数是**上限**（默认 2 个文件 × 每个 4 条连接）：一旦收到 FloodWait，TG Agent 会把同时进行的请求减半、等限流结束，再在平稳后逐步加回。任务会显示等待原因（“限流等待 37s”“重新连接中”“等待下载时段”），3 分钟没有进展的下载会自动换新连接。
+
+可在设置中限制总速度（KB/s）和下载时段（如 23:00–07:00）。
 
 **瓶颈通常在代理**：代理本身限速时，加连接也不会更快。可以试试 TUN 模式代理并在 TG Agent 里选“直连”，或换更快的代理。
 
@@ -129,6 +139,8 @@ AI 没有调用 `tg_start_workflow` 时，调用仍会被记录，归入该会�
 ## 致谢
 
 基于 [Telethon](https://github.com/LonamiWebs/Telethon)。下载思路参考 [tdl](https://github.com/iyear/tdl)，订阅与筛选参考 [telegram_media_downloader](https://github.com/tangyoha/telegram_media_downloader)。
+
+内置字体（SIL OFL 1.1，许可见 `tgagent/web/fonts/`）：[缝合像素字体 Fusion Pixel](https://github.com/TakWolf/fusion-pixel-font)（仅保留界面用到的字，可用 `tools/subset_fonts.py` 重新生成）、[VT323](https://fonts.google.com/specimen/VT323)、[Silkscreen](https://fonts.google.com/specimen/Silkscreen)。
 
 ## 许可证
 

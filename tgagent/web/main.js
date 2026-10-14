@@ -34,6 +34,13 @@ function render() {
 function renderTop() {
   const st = S.stats;
   $('#top-speed').textContent = `${size(st.speed || 0)}/s`;
+  const win = $('#top-window');
+  const closed = st.window_open === false;
+  win.hidden = !closed && !st.speed_limit_kbps;
+  win.querySelector('span').textContent = closed ? t('top.window') : t('top.limit', { n: size(st.speed_limit_kbps * 1024) + '/s' });
+  const up = $('#update-note');
+  up.classList.toggle('show', !!S.update?.newer);
+  if (S.update?.newer) { up.textContent = t('update.available', { v: S.update.version }); up.href = S.update.url; }
   $('#top-active span').textContent = `${st.running || 0} / ${st.queued || 0}`;
   const def = S.accounts.find(a => a.is_default) || S.accounts[0];
   $('#top-account').innerHTML = def
@@ -62,7 +69,7 @@ async function loadState() {
   S.tasks = new Map(st.tasks.map(x => [x.id, x]));
   S.activity = new Map(st.activity.map(e => [e.id, e]));
   S.workflows = new Map(st.workflows.map(w => [w.id, w]));
-  S.approvals = st.approvals; S.watches = st.watches;
+  S.approvals = st.approvals; S.watches = st.watches; S.update = st.update || {};
   const tools = await api('/api/tools');
   S.toolsMeta = Object.fromEntries(tools.map(x => [x.name, x]));
   LANG = st.settings.language === 'zh' ? 'zh' : 'en';
@@ -90,13 +97,24 @@ function connectEvents() {
     if (ev.batch || ev.watch_id) refreshApprovals();
     if (S.page === 'workflow' && S.wf.view === 'log') renderWfMain();
   });
-  es.addEventListener('workflow', e => onWorkflowEvent(JSON.parse(e.data)));
+  es.addEventListener('workflow', e => {
+    const w = JSON.parse(e.data);
+    const prev = S.workflows.get(w.id);
+    if (prev && prev.status === 'active' && w.status !== 'active' && w.explicit) notify(t('n.wf'), w.title);
+    onWorkflowEvent(w);
+  });
+  es.addEventListener('update', e => { S.update = JSON.parse(e.data); render(); });
   es.addEventListener('step', e => onStepEvent(JSON.parse(e.data)));
   es.addEventListener('task', e => {
     const tk = JSON.parse(e.data);
     const prev = S.tasks.get(tk.id);
     S.tasks.set(tk.id, tk);
     if ((prev?.status === 'approval') !== (tk.status === 'approval')) api('/api/approvals').then(a => { S.approvals = a; renderApprovals(); render(); });
+    if (tk.kind === 'download' && prev && prev.status !== tk.status) {
+      if (tk.status === 'done') notifyBatch('done', tk.title);
+      if (tk.status === 'failed') notifyBatch('failed', tk.title);
+      if (tk.status === 'approval' && prev.status !== 'approval') notifyBatch('approval', tk.chat_title);
+    }
     onTaskForFlow(tk);
     render();
   });
@@ -105,6 +123,30 @@ function connectEvents() {
     S.speedHist.push(S.stats.speed || 0); S.speedHist.shift();
     render();
   });
+}
+
+/* ------------------------------------------------------------ desktop notifications */
+function notifyEnabled() {
+  try { return localStorage.getItem('tga-notify') === '1' && 'Notification' in window && Notification.permission === 'granted'; } catch (e) { return false; }
+}
+function setNotify(on) { try { localStorage.setItem('tga-notify', on ? '1' : '0'); } catch (e) {} }
+function notify(title, body) {
+  if (!notifyEnabled()) return;
+  try { new Notification(title, { body, icon: '/assets/icon.svg', tag: title }); } catch (e) {}
+}
+const pending = { done: [], failed: [], approval: [] };
+let notifyTimer = null;
+function notifyBatch(kind, name) {
+  pending[kind].push(name);
+  clearTimeout(notifyTimer);
+  notifyTimer = setTimeout(() => {
+    for (const k of Object.keys(pending)) {
+      const items = pending[k];
+      if (!items.length) continue;
+      notify(t('n.' + k) + (items.length > 1 ? ` ×${items.length}` : ''), items.slice(0, 3).join('\n'));
+      pending[k] = [];
+    }
+  }, 2500);
 }
 
 /* ------------------------------------------------------------ boot */

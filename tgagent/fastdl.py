@@ -26,6 +26,84 @@ log = logging.getLogger("tgagent.fastdl")
 PART_TIMEOUT = 60
 MAX_PART_RETRIES = 6
 MAX_ROUNDS = 4
+RAISE_AFTER = 20        # seconds without FloodWait before the limiter adds a slot back
+
+
+class AdaptiveLimiter:
+    """Caps in-flight GetFile requests per account and adapts to Telegram's rate limit (AIMD):
+    a FloodWait halves the cap and pauses every request until it expires; quiet periods add slots back."""
+
+    def __init__(self, max_slots: int = 8):
+        self.max = max(1, max_slots)
+        self.limit = self.max
+        self.active = 0
+        self.flood_until = 0.0
+        self.last_change = time.time()
+        self.floods = 0
+        self._changed = asyncio.Event()
+
+    def set_max(self, n: int) -> None:
+        n = max(1, int(n))
+        if n != self.max:
+            self.max = n
+            self.limit = min(self.limit, n) if self.limit else n
+            self._changed.set()
+
+    async def acquire(self) -> None:
+        while True:
+            wait = self.flood_until - time.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+                continue
+            if self.active < self.limit:
+                self.active += 1
+                return
+            self._changed.clear()
+            try:
+                await asyncio.wait_for(self._changed.wait(), timeout=1)
+            except asyncio.TimeoutError:
+                pass
+
+    def release(self) -> None:
+        self.active = max(0, self.active - 1)
+        self._changed.set()
+
+    def on_flood(self, seconds: int) -> None:
+        now = time.time()
+        self.floods += 1
+        self.flood_until = max(self.flood_until, now + seconds + 1)
+        if now - self.last_change > 2:          # several workers report the same flood at once: halve once
+            self.limit = max(1, self.limit // 2)
+            self.last_change = now
+
+    def on_success(self) -> None:
+        now = time.time()
+        if self.limit < self.max and now - max(self.last_change, self.flood_until) > RAISE_AFTER:
+            self.limit += 1
+            self.last_change = now
+            self._changed.set()
+
+
+class RateLimiter:
+    """Global token bucket shared by all downloads (bytes per second; 0 = unlimited)."""
+
+    def __init__(self) -> None:
+        self.rate = 0
+        self.tokens = 0.0
+        self.ts = time.time()
+
+    async def consume(self, n: int) -> None:
+        if self.rate <= 0:
+            return
+        now = time.time()
+        self.tokens = min(self.rate, self.tokens + (now - self.ts) * self.rate)
+        self.ts = now
+        self.tokens -= n
+        if self.tokens < 0:
+            await asyncio.sleep(-self.tokens / self.rate)
+
+
+RATE = RateLimiter()
 
 
 class SenderPool:
@@ -37,6 +115,7 @@ class SenderPool:
         self.total = 0
         self._lock = asyncio.Lock()
         self.last_used = time.time()
+        self.limiter = AdaptiveLimiter()
 
     async def acquire(self, dc_id: int) -> MTProtoSender:
         self.last_used = time.time()
@@ -102,6 +181,7 @@ async def parallel_download(
     on_progress: Callable[[int], None],
     refresh_media: Callable[[], Awaitable[object]],
     on_event: Callable[[str, str], None] = lambda level, text: None,
+    on_state: Callable[[str | None, float | None], None] = lambda reason, until: None,
 ) -> None:
     """Download media into part_path (the caller renames it). Cancellable; progress is kept for resuming."""
     info = utils._get_file_info(media)
@@ -164,6 +244,8 @@ async def parallel_download(
             state["location"] = utils._get_file_info(new_media).location
             on_event("info", "File reference expired; refreshed")
 
+    limiter: AdaptiveLimiter | None = getattr(pool, "limiter", None)
+
     async def worker() -> None:
         sender: MTProtoSender | None = None
         try:
@@ -175,8 +257,11 @@ async def parallel_download(
                 offset = idx * part_size
                 last_err: BaseException | None = None
                 data = None
-                for attempt in range(MAX_PART_RETRIES):
+                failures = 0          # only network failures count; FloodWait waits never fail a part
+                while failures < MAX_PART_RETRIES:
                     loc = state["location"]
+                    if limiter:
+                        await limiter.acquire()
                     try:
                         if sender is None:
                             sender = await asyncio.wait_for(pool.acquire(dc_id), timeout=PART_TIMEOUT)
@@ -186,10 +271,17 @@ async def parallel_download(
                         if not isinstance(res, types.upload.File):
                             raise RuntimeError("CDN redirect is not supported")
                         data = res.bytes
+                        if limiter:
+                            limiter.on_success()
+                        on_state(None, None)
                         break
                     except FloodWaitError as e:
-                        on_event("warn", f"FloodWait: waiting {e.seconds}s")
-                        await asyncio.sleep(e.seconds + 1)
+                        if limiter:
+                            limiter.on_flood(e.seconds)
+                            on_state("flood", limiter.flood_until)
+                        else:
+                            on_state("flood", time.time() + e.seconds)
+                            await asyncio.sleep(e.seconds + 1)
                     except FileReferenceExpiredError:
                         await refresh_location(loc)
                     except RPCError:
@@ -198,14 +290,20 @@ async def parallel_download(
                     except Exception as e:
                         # Network errors: proxies dropping connections raise IncompleteReadError (an EOFError), timeouts, resets…
                         last_err = e
-                        log.warning("part %s attempt %s failed: %r", idx, attempt + 1, e)
+                        failures += 1
+                        log.warning("part %s attempt %s failed: %r", idx, failures, e)
+                        on_state("reconnecting", None)
                         if sender is not None:
                             await pool.discard(sender)
                             sender = None
-                        await asyncio.sleep(min(2 ** attempt, 20))
+                        await asyncio.sleep(min(2 ** failures, 20))
+                    finally:
+                        if limiter:
+                            limiter.release()
                 if data is None:
                     queue.put_nowait(idx)  # hand it back to another connection or the next round
                     raise ConnectionError(f"Part {idx} failed after {MAX_PART_RETRIES} attempts: {last_err!r}")
+                await RATE.consume(len(data))
                 f.seek(offset)
                 f.write(data)
                 done.add(idx)

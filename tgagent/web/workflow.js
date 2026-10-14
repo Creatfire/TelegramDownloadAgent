@@ -58,7 +58,7 @@ function renderWfList() {
                   [t('wf.earlier'), items.filter(w => w.status !== 'active' && new Date(w.updated * 1000).toDateString() !== today)]];
   box.innerHTML = groups.filter(g => g[1].length).map(([label, list]) => `<div class="wf-group label">${label}</div>` + list.slice(0, 120).map(w => `
     <div class="wf-item ${S.wf.sel === w.id ? 'on' : ''}" data-id="${w.id}">
-      <span class="st ${w.status}"></span>
+      <span class="st ${w.status} ${w.status === 'active' ? 'ripple' : ''}"></span>
       <div class="wf-item-title ${w.explicit ? '' : 'implicit'}">${esc(w.explicit ? w.title : t('wf.untitled'))}</div>
       <div class="wf-item-meta">${who(w.agent)}<span>${t('wf.steps', { n: w.steps })}</span><span>${ago(w.updated)}</span></div>
     </div>`).join('')).join('');
@@ -89,8 +89,10 @@ function renderWfMain() {
   main.innerHTML = `
     <div class="wf-head">
       <div class="wf-title"><span ${w.explicit ? 'contenteditable="plaintext-only" spellcheck="false" title="' + esc(t('wf.renameHint')) + '"' : ''} id="wf-title-text">${esc(w.explicit ? w.title : t('wf.untitled'))}</span>${wfTag(w.status)}
-        <button class="icon-btn danger" id="wf-del" title="${t('wf.delete')}" style="margin-left:auto">${icon('trash')}</button></div>
-      <div class="wf-meta">${who(w.agent)}<span>${t('wf.started')} ${clock(w.created)}</span><span>${t('wf.duration')} ${dur(end - w.created)}</span>
+        <span class="wf-actions"><button class="btn ghost sm" id="wf-report">${icon('report')}${t('wf.report')}</button>
+        <button class="btn ghost sm" id="wf-rerun">${icon('retry')}${t('wf.rerun')}</button>
+        <button class="icon-btn danger" id="wf-del" title="${t('wf.delete')}">${icon('trash')}</button></span></div>
+      <div class="wf-meta">${who(w.agent)}<span>${t('wf.started')} <span class="num">${clock(w.created)}</span></span><span>${t('wf.duration')} ${dur(end - w.created)}</span>
         <span>${t('wf.steps', { n: d.steps.length })}</span>${w.polls ? `<span>${t('wf.polls', { n: w.polls })}</span>` : ''}</div>
       ${w.explicit ? '' : `<div class="wf-goal muted small">${icon('info')} ${t('wf.implicitTip')}</div>`}
       ${w.goal ? `<div class="wf-goal">${esc(w.goal)}</div>` : ''}
@@ -117,7 +119,7 @@ function nodeHtml(s) {
     const shown = tasks.slice(0, 6);
     sub = `<div class="node-sub">${shown.map(tk => tk.kind === 'download' ? `
         <div class="sub-row">${kindIco(tk.file_kind)}<div class="sub-name" title="${esc(tk.title)}">${esc(tk.title)}</div>
-          <div class="sub-prog">${tk.status === 'running' ? `${pct(tk).toFixed(0)}% · ${size(tk.speed)}/s` : t('task.' + tk.status)}
+          <div class="sub-prog">${waitText(tk) || (tk.status === 'running' ? `${pct(tk).toFixed(0)}% · ${size(tk.speed)}/s` : t('task.' + tk.status))}
             <div class="bar ${tk.status}"><div style="width:${pct(tk)}%"></div></div></div></div>` : `
         <div class="sub-row">${kindIco('document')}<div class="sub-name">${esc(tk.title)}</div>
           <div class="sub-prog">${tk.status === 'done' ? esc(tk.note || t('task.done')) : tk.status === 'running' ? t('tasks.scanned', { n: tk.done }) : t('task.' + tk.status)}
@@ -146,7 +148,7 @@ function renderFlow() {
   const endCls = w.status === 'active' ? 'live' : w.status === 'failed' ? 'failed' : '';
   const endText = w.status === 'active' ? t('wf.waiting') : w.status === 'failed' ? t('wf.failedEnd') : w.status === 'done' ? t('wf.finished') : t('wf.idleEnd');
   flow.innerHTML = (steps.length ? steps.map(nodeHtml).join('') : `<div class="empty">${t('wf.noSteps')}</div>`)
-    + `<div class="flow-end ${endCls}" id="wf-end"><span class="dot"></span>${endText}</div>`;
+    + `<div class="flow-end ${endCls}" id="wf-end"><span class="dot ${endCls === 'live' ? 'ripple' : ''}"></span>${endText}</div>`;
   S.wf.newIds.clear();
   requestAnimationFrame(() => {
     drawEdges();
@@ -283,6 +285,22 @@ function bindWorkflow() {
   };
   $('#wf-main').addEventListener('click', async e => {
     if (e.target.closest('[data-ap]')) return onApproval(e);
+    if (e.target.closest('#wf-report')) {
+      const r = await fetch(`/api/workflows/${S.wf.sel}/report`, { credentials: 'same-origin' });
+      const blob = new Blob([await r.text()], { type: 'text/markdown' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `workflow-${S.wf.sel}.md`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      return;
+    }
+    if (e.target.closest('#wf-rerun')) {
+      if (!confirmBox(t('wf.rerunConfirm'))) return;
+      try { const r = await post(`/api/workflows/${S.wf.sel}/rerun`); toast(t('wf.rerunStarted')); S.wf.follow = true; $('#wf-follow').checked = true; setTimeout(() => selectWorkflow(r.workflow_id), 300); }
+      catch (err) { toast(err.message, false); }
+      return;
+    }
     if (e.target.closest('#wf-del')) {
       if (!confirmBox(t('wf.deleteConfirm'))) return;
       await api(`/api/workflows/${S.wf.sel}`, { method: 'DELETE' });

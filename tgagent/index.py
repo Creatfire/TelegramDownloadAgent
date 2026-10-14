@@ -68,6 +68,12 @@ def _row(r: dict, titles: dict) -> dict:
             out["link"] = f"https://t.me/c/{str(r['chat_id'])[4:]}/{r['message_id']}"
     if r.get("caption"):
         out["caption"] = r["caption"][:120]
+    from .readers import split_info
+    arc = split_info(r["name"])
+    if arc:
+        out["archive"] = arc
+    if r.get("downloaded"):
+        out["downloaded"] = True
     return out
 
 
@@ -97,9 +103,13 @@ def search(account: str | None, query: str = "", chat_ids: list[int] | None = No
     w = ("WHERE " + " AND ".join(where)) if where else ""
     order = {"size": "size DESC", "name": "name_lc ASC", "date": "date DESC"}.get(sort, "date DESC")
     agg = db.one(f"SELECT COUNT(*) n, COALESCE(SUM(size),0) s FROM files {w}", params)
-    rows = db.all(f"SELECT * FROM files {w} ORDER BY {order} LIMIT ?", params + [max(1, min(int(limit), 1000))])
+    rows = db.all(f"SELECT *, EXISTS(SELECT 1 FROM downloads d WHERE d.file_id = files.file_id) AS downloaded "
+                  f"FROM files {w} ORDER BY {order} LIMIT ?", params + [max(1, min(int(limit), 1000))])
     titles = _titles(account)
-    return {"matched": agg["n"], "total_size": agg["s"], "files": [_row(r, titles) for r in rows]}
+    out = [_row(r, titles) for r in rows]
+    from .readers import archive_sets
+    return {"matched": agg["n"], "total_size": agg["s"], "files": out,
+            "archive_sets": [{k: v for k, v in g.items() if k != "message_ids"} for g in archive_sets(out)]}
 
 
 _STEM_RE = re.compile(r"[\s_\-\.\[\]\(\)【】（）]+")

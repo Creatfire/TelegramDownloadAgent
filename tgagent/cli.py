@@ -61,6 +61,46 @@ def main() -> None:
     if open_browser:
         threading.Timer(1.5, lambda: webbrowser.open(console)).start()
     from .server import app
-    uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
+    server = uvicorn.Server(uvicorn.Config(app, host=HOST, port=PORT, log_level="warning"))
+    if "--no-tray" not in args:
+        _start_tray(server, console, token)
+    server.run()
+
+
+def _tray_image():
+    from PIL import Image, ImageDraw
+    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle((2, 2, 62, 62), radius=14, fill=(34, 30, 26, 255), outline=(232, 131, 58, 255), width=3)
+    d.polygon([(14, 33), (50, 17), (43, 49), (32, 41), (26, 47), (26, 38), (42, 24), (22, 36)], fill=(232, 131, 58, 255))
+    return img
+
+
+def _start_tray(server, console: str, token: str) -> None:
+    """System tray icon (Windows): open the console, pause all downloads, quit."""
+    if sys.platform != "win32":
+        return
+    try:
+        import pystray
+    except ImportError:
+        return
+
+    def pause_all(icon, item):
+        try:
+            httpx.post(f"http://{HOST}:{PORT}/api/tasks/control", json={"action": "pause", "all": True},
+                       headers={"Authorization": f"Bearer {token}"}, timeout=5, trust_env=False)
+        except httpx.HTTPError:
+            pass
+
+    def quit_app(icon, item):
+        icon.stop()
+        server.should_exit = True
+
+    icon = pystray.Icon("tg-agent", _tray_image(), f"TG Agent {__version__}", menu=pystray.Menu(
+        pystray.MenuItem("Open console / 打开控制台", lambda i, it: webbrowser.open(console), default=True),
+        pystray.MenuItem("Pause all downloads / 全部暂停", pause_all),
+        pystray.MenuItem("Quit / 退出", quit_app),
+    ))
+    threading.Thread(target=icon.run, daemon=True).start()
 
 

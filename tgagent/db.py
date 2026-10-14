@@ -39,6 +39,12 @@ CREATE INDEX IF NOT EXISTS ix_files_name ON files(name_lc);
 CREATE INDEX IF NOT EXISTS ix_files_size ON files(size);
 CREATE INDEX IF NOT EXISTS ix_files_fid ON files(file_id);
 
+CREATE TABLE IF NOT EXISTS downloads (
+    file_id INTEGER, account TEXT, chat_id INTEGER, message_id INTEGER, chat_title TEXT, name TEXT,
+    path TEXT, size INTEGER, finished REAL, PRIMARY KEY (account, chat_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS ix_dl_fid ON downloads(file_id);
+
 CREATE TABLE IF NOT EXISTS watches (
     id TEXT PRIMARY KEY, account TEXT, chat TEXT, chat_id INTEGER, chat_title TEXT, filters TEXT,
     interval_min INTEGER, subdir TEXT, enabled INTEGER, pending_approval INTEGER, last_message_id INTEGER,

@@ -10,10 +10,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, auth, secure
+from . import __version__, auth, extras, secure
 from .accounts import AccountError, manager as accounts
 from .activity import bus
 from .config import DATA_DIR, EXPORTS_DIR, PORT, ROOT, WEB_DIR, settings
@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
         bus.log("warn", "system", L("未找到系统钥匙串", "No system keychain"),
                 L("api_hash 仅做了编码存储", "api_hash is only obfuscated on disk"))
     bg = [asyncio.create_task(accounts.connect_all()), asyncio.create_task(tm.run_forever()),
-          asyncio.create_task(watches.run_forever())]
+          asyncio.create_task(watches.run_forever()), asyncio.create_task(extras.update_loop())]
     async with mcp_srv.session_manager.run():
         yield
     for t in bg:
@@ -164,6 +164,7 @@ async def api_state():
         "accounts": accounts.list(), "settings": settings.all(),
         "stats": tm.stats(), "tasks": tm.list(limit=400), "approvals": tm.approvals(),
         "activity": list(bus.recent)[-200:], "workflows": workflows.list(150), "watches": watches.list(),
+        "update": extras.latest,
         "paths": {"root": str(ROOT), "data": str(DATA_DIR), "exports": str(EXPORTS_DIR), "checkout": (ROOT / "mcp_stdio.py").exists(), "frozen": bool(getattr(sys, "frozen", False)),
                   "python": sys.executable},
     }
@@ -213,6 +214,30 @@ async def api_step(step_id: str):
     if not s:
         raise HTTPException(404, "not found")
     return s
+
+
+@app.get("/api/workflows/{wf_id}/report")
+async def api_workflow_report(wf_id: str):
+    tm = get_tasks()
+    tasks = [t.public() for t in tm.tasks.values() if t.workflow_id == wf_id]
+    try:
+        md = extras.workflow_report(wf_id, tasks)
+    except ValueError:
+        raise HTTPException(404, "not found")
+    return PlainTextResponse(md, media_type="text/markdown; charset=utf-8")
+
+
+@app.post("/api/workflows/{wf_id}/rerun")
+async def api_workflow_rerun(wf_id: str):
+    try:
+        return await extras.rerun_workflow(wf_id)
+    except ValueError:
+        raise HTTPException(404, "not found")
+
+
+@app.post("/api/update/check")
+async def api_update_check():
+    return await extras.check_updates_once() or {"error": "unavailable"}
 
 
 @app.patch("/api/workflows/{wf_id}")
@@ -358,6 +383,8 @@ async def api_save_settings(body: dict):
         body["connections_per_file"] = min(body["connections_per_file"], 16)
     if "max_concurrent_files" in body:
         body["max_concurrent_files"] = min(body["max_concurrent_files"], 8)
+    if "speed_limit_kbps" in body:
+        body["speed_limit_kbps"] = max(0, int(body["speed_limit_kbps"] or 0))
     for k in ("read_wait_time", "approval_size_gb"):
         if k in body:
             body[k] = max(0.0, float(body[k]))

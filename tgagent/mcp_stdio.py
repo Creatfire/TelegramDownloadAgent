@@ -39,6 +39,32 @@ async def list_fn():
 
 
 async def call_fn(name: str, args: dict, agent: str, _session: str):
+    if name == "tg_wait_tasks":
+        return await _wait_with_progress(args, agent)
+    return await _forward(name, args, agent)
+
+
+async def _wait_with_progress(args: dict, agent: str):
+    """Wait in short slices so this bridge can relay progress notifications to its client."""
+    from .workflow import progress_reporter
+    report = progress_reporter.get()
+    deadline = anyio.current_time() + min(float(args.get("timeout_s") or 120), 1800)
+    while True:
+        left = max(1, int(deadline - anyio.current_time()))
+        ok, res = await _forward("tg_wait_tasks", {**args, "timeout_s": min(10, left)}, agent)
+        if not ok or res.get("finished") or anyio.current_time() >= deadline:
+            return ok, res
+        if report:
+            ts = res.get("tasks", [])
+            total = sum(t.get("total", 0) for t in ts) or len(ts)
+            done = sum(t.get("done", 0) for t in ts)
+            try:
+                await report(done, total, ", ".join(f"{k}x{v}" for k, v in res.get("counts", {}).items()))
+            except Exception:
+                pass
+
+
+async def _forward(name: str, args: dict, agent: str):
     try:
         async with httpx.AsyncClient(timeout=600, trust_env=False) as c:
             r = await c.post(f"{BASE}/api/tools/{name}", json=args, headers=_headers(agent))

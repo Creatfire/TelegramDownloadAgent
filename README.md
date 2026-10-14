@@ -10,12 +10,15 @@ Everything the AI does shows up live in a web console as a **workflow**: one car
 
 - 🔍 **Read** — history, search, file listings with filters (kind, name, extension, size, date), invite-link inspection
 - 🗂 **Local index** — search and compare channels offline, no Telegram requests
-- ⚡ **Fast downloads** — several MTProto connections per file, resumable, FloodWait-aware
+- ⚡ **Fast downloads** — several MTProto connections per file, resumable; concurrency adapts to Telegram's rate limits by itself
+- 🗜 **Split archives** — `x.7z.001…`, `x.part1.rar`… are recognised; asking for one volume fetches the whole set and missing volumes are flagged
+- ♻ **No duplicates** — a file already downloaded from another chat is skipped
+- ⏱ **Speed limit and download hours**, desktop notifications, a tray icon (Windows) and an update check
 - 👁 **Watches** — automatically download new matching files from a channel
 - 🧭 **Workflows** — every AI request grouped and drawn as a step graph you can inspect
 - 🛡 **Safe by default** — never sends messages or joins chats; large AI downloads and AI-created watches wait for your approval; local access token
 - 👥 **Multiple accounts**, per-account proxies, QR-code or code + 2FA login
-- 🌗 Dark / light theme, English / 中文
+- 🌗 Dark / light theme with a restrained retro-futurist look, English / 中文
 
 ## Quick start
 
@@ -83,8 +86,10 @@ Get the token with `tg-agent token` (or from the Connect AI page).
 | `tg_get_message` | One message in full, albums included |
 | `tg_list_files` | File metadata with filters, counts and total size (also feeds the local index) |
 | `tg_export` | Background export of all files or messages to csv / json / jsonl / md |
-| `tg_download` | Queue downloads by links, by message ids, or by filter |
-| `tg_tasks` / `tg_task_control` | Progress, speed, ETA; pause / resume / retry / cancel |
+| `tg_plan_download` | Dry run: file count, total size, split-archive sets and missing volumes, already-downloaded files, approval needed, estimated time |
+| `tg_download` | Queue downloads by links, by message ids, or by filter (completes split archives by default) |
+| `tg_wait_tasks` | Wait for tasks to finish with progress notifications — no polling loops |
+| `tg_tasks` / `tg_task_control` | Progress, speed, ETA, why a task is waiting; pause / resume / retry / cancel |
 | `tg_index_chat` / `tg_index_status` | Index a whole chat (incrementally) into the local SQLite index |
 | `tg_search_files` | Search the local index across chats — no Telegram requests |
 | `tg_compare_chats` | What two chats have in common / only one has (by name, name+size, stem or identical file) |
@@ -96,12 +101,17 @@ Get the token with `tg-agent token` (or from the Connect AI page).
 - **Middle:** the steps of the selected workflow. Thin lines link consecutive steps; amber arcs in the margin mark **data dependencies** (a step that used a chat, message or task produced by an earlier step). Download steps list their files with live progress. Repeated progress polling doesn't add nodes; it shows as *“Progress checked ×N”*.
 - **Right:** click a node to see its full arguments and result.
 - *Follow the latest activity* jumps to whatever the AI is doing now. The **Log** tab shows the raw event stream.
+- **Export report** saves a workflow as Markdown; **Re-run** replays its steps as a new workflow (downloads still follow the approval rules).
 
 If an AI doesn't call `tg_start_workflow`, its calls are still recorded, in an *untitled workflow* per session.
 
 ## Download speed
 
-Each file is fetched over several MTProto connections in parallel (like [tdl](https://github.com/iyear/tdl)), written into a pre-allocated `.part` file, and finished parts are recorded so downloads survive pauses, restarts and dropped connections. The defaults are 2 files × 4 connections; more concurrency means a higher chance of Telegram's FloodWait rate limit, which is waited out automatically.
+Each file is fetched over several MTProto connections in parallel (like [tdl](https://github.com/iyear/tdl)), written into a pre-allocated `.part` file, and finished parts are recorded so downloads survive pauses, restarts and dropped connections.
+
+Telegram limits how many file requests an account may make. Settings give the *maximum* concurrency (default 2 files × 4 connections); TG Agent halves its in-flight requests whenever Telegram answers with FloodWait, pauses until the wait is over, and slowly adds capacity back while things are quiet. Tasks show why they are waiting (*rate-limited 37 s*, *reconnecting*, *waiting for download hours*), and a download that makes no progress for 3 minutes gets fresh connections automatically.
+
+You can cap total speed (KB/s) and restrict downloads to certain hours (e.g. 23:00–07:00) in Settings.
 
 **Your proxy is usually the bottleneck.** If it caps throughput, more connections won't help — try a TUN-mode proxy with *Direct* in TG Agent, or a faster proxy.
 
@@ -158,6 +168,8 @@ Manual test checklist for testers (human or AI): [docs/TESTING.md](docs/TESTING.
 ## Credits
 
 Built on [Telethon](https://github.com/LonamiWebs/Telethon). Download approach inspired by [tdl](https://github.com/iyear/tdl); watch/filter ideas from [telegram_media_downloader](https://github.com/tangyoha/telegram_media_downloader).
+
+Bundled fonts (SIL Open Font License 1.1, see `tgagent/web/fonts/`): [Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font) (subset to the UI's characters — rebuild with `tools/subset_fonts.py`), [VT323](https://fonts.google.com/specimen/VT323), [Silkscreen](https://fonts.google.com/specimen/Silkscreen).
 
 ## License
 

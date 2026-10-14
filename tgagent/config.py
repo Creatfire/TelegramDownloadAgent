@@ -55,6 +55,15 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "approval_files": 50,
     # Seconds of inactivity after which an implicit (not explicitly started) workflow is closed
     "workflow_idle_seconds": 1800,
+    # Global download speed limit in KB/s (0 = unlimited)
+    "speed_limit_kbps": 0,
+    # Only download between these local times ("HH:MM"; both empty = any time; may wrap midnight)
+    "download_window_start": "",
+    "download_window_end": "",
+    # Skip files that were already downloaded (same Telegram file, e.g. forwarded to several channels)
+    "dedupe_downloads": True,
+    # Check GitHub for new releases once a day
+    "check_updates": True,
 }
 
 

@@ -74,7 +74,7 @@ function renderChat() {
 function fileTable(files, opts = {}) {
   return `<table class="file-table"><thead><tr>${opts.select ? '<th style="width:30px"></th>' : ''}<th>${t('col.name')}</th>${opts.chat ? `<th>${t('col.chat')}</th>` : ''}<th style="width:96px">${t('col.size')}</th><th style="width:136px">${t('col.date')}</th><th style="width:84px">${t('col.msg')}</th><th style="width:40px"></th></tr></thead><tbody>
     ${files.map(f => `<tr data-mid="${f.message_id}" data-link="${esc(f.link || '')}">${opts.select ? `<td><input type="checkbox" ${S.b.selected.has(f.message_id) ? 'checked' : ''}></td>` : ''}
-      <td><div class="fname">${kindIco(f.kind)}<span title="${esc(f.name)}${f.caption ? '\n\n' + esc(f.caption) : ''}">${esc(f.name)}</span></div></td>
+      <td><div class="fname">${kindIco(f.kind)}<span class="n" title="${esc(f.name)}${f.caption ? '\n\n' + esc(f.caption) : ''}">${esc(f.name)}</span>${fileTags(f)}</div></td>
       ${opts.chat ? `<td class="muted small">${esc(f.chat || '')}</td>` : ''}
       <td class="num">${size(f.size)}</td><td class="num muted">${dateStr(f.date)}</td>
       <td>${f.link ? `<a href="${esc(f.link)}" target="_blank" class="mono">#${f.message_id}</a>` : '#' + f.message_id}</td>
@@ -86,7 +86,7 @@ function renderBody() {
   if (b.tab === 'files') {
     const s = b.fileSummary, loaded = b.files.reduce((x, f) => x + f.size, 0);
     body.innerHTML = (s ? `<div class="summary-strip"><span>${t('browse.loaded', { n: `<b>${b.files.length}</b>` })}</span><span>${t('browse.total', { s: `<b>${size(loaded)}</b>` })}</span>
-        <span>${t('browse.scanned', { n: `<b>${s.scanned}</b>` })}</span><span>${b.fileCursor ? t('browse.more') : t('browse.end')}</span></div>` : '')
+        <span>${t('browse.scanned', { n: `<b>${s.scanned}</b>` })}</span><span>${b.fileCursor ? t('browse.more') : t('browse.end')}</span></div>${archiveSets(s.sets)}` : '')
       + (b.files.length ? fileTable(b.files, { select: true }) : (b.loading ? '' : `<div class="empty">${t('browse.noFiles')}</div>`))
       + (b.loading ? `<div class="load-more">${icon('loader', 'spin')}</div>` : b.fileCursor ? `<div class="load-more"><button class="btn" id="more-files">${t('browse.loadMore')}</button></div>` : '');
     const si = $('#sel-info');
@@ -117,7 +117,7 @@ async function loadFiles(more = false) {
     const r = await tool('tg_list_files', args);
     b.files = more ? b.files.concat(r.files) : r.files;
     b.fileCursor = r.next_offset_id;
-    b.fileSummary = { scanned: (more && b.fileSummary ? b.fileSummary.scanned : 0) + r.scanned_messages };
+    b.fileSummary = { scanned: (more && b.fileSummary ? b.fileSummary.scanned : 0) + r.scanned_messages, sets: r.archive_sets };
   } catch (e) { toast(e.message, false); }
   b.loading = false; renderBody();
 }
@@ -136,7 +136,8 @@ async function loadMsgs(more = false) {
 async function downloadArgs(args) {
   try {
     const r = await tool('tg_download', args);
-    toast(t('browse.queued', { n: r.queued, s: r.total_size_human }) + (r.skipped.length ? t('browse.skipped', { n: r.skipped.length }) : ''));
+    toast(t('browse.queued', { n: r.queued, s: r.total_size_human }) + (r.added_archive_parts ? t('browse.addedParts', { n: r.added_archive_parts }) : '')
+      + (r.skipped.length ? t('browse.skipped', { n: r.skipped.length }) : ''));
   } catch (e) { toast(e.message, false); }
 }
 const downloadIds = ids => ids.length ? downloadArgs({ account: S.b.account, chat: String(S.b.chat), message_ids: ids }) : toast(t('browse.pickFirst'), false);
@@ -232,7 +233,7 @@ function renderLibIndex() {
 function renderLibResults() {
   const r = S.lib.results, box = $('#l-results');
   if (!r) { box.innerHTML = `<div class="empty">${t(S.lib.index.length ? 'lib.empty' : 'lib.noIndex')}</div>`; return; }
-  box.innerHTML = `<div class="summary-strip"><span>${t('lib.matched', { n: `<b>${r.matched}</b>`, s: `<b>${size(r.total_size)}</b>` })}</span></div>`
+  box.innerHTML = `<div class="summary-strip"><span>${t('lib.matched', { n: `<b>${r.matched}</b>`, s: `<b>${size(r.total_size)}</b>` })}</span></div>${archiveSets(r.archive_sets)}`
     + (r.files.length ? fileTable(r.files, { chat: true }) : `<div class="empty">${t('browse.noFiles')}</div>`);
 }
 async function runLibSearch() {
@@ -305,7 +306,8 @@ function renderTasks() {
       <div class="task-prog">${dl
         ? `<span class="num">${size(tk.done)} / ${size(tk.total)} · ${p.toFixed(1)}%</span><div class="bar ${tk.status}"><div style="width:${p}%"></div></div>`
         : `<span class="num">${t('tasks.scanned', { n: tk.done })}</span><div class="bar ${tk.status}"><div style="width:${tk.status === 'done' ? 100 : 50}%"></div></div>`}</div>
-      <div class="task-speed num">${tk.status === 'running' && dl ? `${size(tk.speed)}/s<br><span class="muted">${tk.eta != null ? dur(tk.eta) : ''}</span>` : taskTag(tk.status)}</div>
+      <div class="task-speed">${waitText(tk) ? `<span class="tag warn">${esc(waitText(tk))}</span>`
+        : tk.status === 'running' && dl ? `<div class="num">${size(tk.speed)}/s</div><div class="eta">${tk.eta != null ? dur(tk.eta) : ''}</div>` : taskTag(tk.status)}</div>
       <div class="task-actions">${acts.map(a => `<button class="icon-btn ${a[2] || ''}" title="${t('act.' + a[0])}" data-act="${a[0]}">${icon(a[1])}</button>`).join('')}</div>
     </div>`;
   }).join('');
@@ -567,7 +569,11 @@ function bindConnect() {
 /* ============================================================ settings */
 function fillSettings() {
   const f = $('#settings-form'), s = S.settings;
-  for (const k of ['language', 'download_dir', 'name_template', 'max_concurrent_files', 'connections_per_file', 'read_wait_time', 'approval_size_gb', 'approval_files']) f.elements[k].value = s[k] ?? '';
+  for (const k of ['language', 'download_dir', 'name_template', 'max_concurrent_files', 'connections_per_file', 'read_wait_time', 'approval_size_gb', 'approval_files',
+                   'speed_limit_kbps', 'download_window_start', 'download_window_end']) f.elements[k].value = s[k] ?? '';
+  f.elements.dedupe_downloads.checked = s.dedupe_downloads !== false;
+  f.elements.check_updates.checked = s.check_updates !== false;
+  $('#notify-toggle').checked = notifyEnabled();
   f.elements.part_size_kb.value = String(s.part_size_kb || 512);
   f.elements.workflow_idle_min.value = Math.round((s.workflow_idle_seconds || 1800) / 60);
   const p = s.default_proxy || {};
@@ -576,6 +582,12 @@ function fillSettings() {
   f.elements.proxy_port.value = p.port || '';
 }
 function bindSettings() {
+  $('#notify-toggle').onchange = async e => {
+    if (!e.target.checked) { setNotify(false); return; }
+    const p = 'Notification' in window ? await Notification.requestPermission() : 'denied';
+    if (p !== 'granted') { e.target.checked = false; toast(t('n.denied'), false); return; }
+    setNotify(true);
+  };
   $('#settings-form').onsubmit = async e => {
     e.preventDefault();
     const f = e.target.elements;
@@ -585,6 +597,9 @@ function bindSettings() {
       part_size_kb: Number(f.part_size_kb.value), read_wait_time: Number(f.read_wait_time.value),
       approval_size_gb: Number(f.approval_size_gb.value), approval_files: Number(f.approval_files.value),
       workflow_idle_seconds: Number(f.workflow_idle_min.value || 30) * 60,
+      speed_limit_kbps: Number(f.speed_limit_kbps.value || 0),
+      download_window_start: f.download_window_start.value || '', download_window_end: f.download_window_end.value || '',
+      dedupe_downloads: f.dedupe_downloads.checked, check_updates: f.check_updates.checked,
       default_proxy: f.proxy_type.value ? { type: f.proxy_type.value, host: f.proxy_host.value || '127.0.0.1', port: Number(f.proxy_port.value || 7890) } : { type: '' },
     };
     try { S.settings = await post('/api/settings', body); setLang(S.settings.language); toast(t('set.saved')); fillSettings(); } catch (err) { toast(err.message, false); }

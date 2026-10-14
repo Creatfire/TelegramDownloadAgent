@@ -15,11 +15,12 @@ The user watches every call live in the TG Agent web console, grouped into workf
 Rules:
 1. At the start of EVERY new user request call tg_start_workflow(title=...) with a short title in the user's language.
    When the request is done call tg_finish_workflow(summary=...).
-2. This is the user's real account: avoid unnecessary requests. Prefer tg_search_files / tg_compare_chats on the
+2. After tg_download, call tg_wait_tasks instead of polling tg_tasks in a loop.
+3. This is the user's real account: avoid unnecessary requests. Prefer tg_search_files / tg_compare_chats on the
    local index; use tg_index_chat or tg_export for complete listings of large chats.
-3. Check count and total size (tg_list_files) before big downloads. Batches above the user's limit wait for approval
+4. Check count and total size with tg_plan_download before big downloads. Batches above the user's limit wait for approval
    in the console; tell the user when that happens.
-4. The service never sends messages and never joins chats."""
+5. The service never sends messages and never joins chats."""
 
 ListFn = Callable[[], Awaitable[list[dict]]]
 CallFn = Callable[[str, dict, str, str], Awaitable[tuple[bool, Any]]]
@@ -54,7 +55,12 @@ def build_server(list_fn: ListFn, call_fn: CallFn, name: str = "tg-agent") -> Se
         return types.ListToolsResult(tools=tools)
 
     async def on_call_tool(ctx, params: types.CallToolRequestParams) -> types.CallToolResult:
-        ok, result = await call_fn(params.name, params.arguments or {}, client_name(ctx), session_key(ctx))
+        from .workflow import progress_reporter
+        token = progress_reporter.set(getattr(ctx.session, "report_progress", None))
+        try:
+            ok, result = await call_fn(params.name, params.arguments or {}, client_name(ctx), session_key(ctx))
+        finally:
+            progress_reporter.reset(token)
         text = json.dumps(result, ensure_ascii=False, indent=1, default=str) if ok else str(result)
         return types.CallToolResult(content=[types.TextContent(text=text)], is_error=not ok)
 

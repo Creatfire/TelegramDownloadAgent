@@ -41,6 +41,9 @@ const ICONS = {
   shield: '<path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
   qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 17h4v4h-4"/>',
   scale: '<path d="M12 3v18M5 7h14M7 7l-3 7a3 3 0 0 0 6 0zM17 7l-3 7a3 3 0 0 0 6 0z"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  report: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/>',
+  layers: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
 };
 const icon = (n, cls = '') => `<i data-icon="${n}" class="${cls}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${ICONS[n] || ''}</svg></i>`;
 function hydrateIcons(root = document) {
@@ -116,6 +119,15 @@ const I18N = {
     'who.system': '系统', 'who.console': '控制台', 'who.download': '下载', 'who.export': '导出', 'who.index': '索引',
     'common.cancel': '取消', 'common.close': '关闭', 'common.unknown': '未知', 'common.ago': '前', 'common.none': '无',
     'kpi.idle': '空闲',
+    'set.speedLimit': '限速（KB/s，0 为不限）', 'set.winStart': '下载时段：从', 'set.winEnd': '到', 'set.dedupe': '跳过已从其他频道下载过的同一文件',
+    'set.notify': '通知与更新', 'set.notifyDesc': '下载完成、等待批准、工作流结束时提醒你。', 'set.desktopNotify': '在这个浏览器中显示桌面通知', 'set.checkUpdates': '每天检查一次 GitHub 新版本',
+    'wait.flood': '限流等待 {n}s', 'wait.reconnecting': '重新连接中', 'wait.window': '等待下载时段', 'wait.stalled': '停滞后已重连',
+    'top.window': '下载时段外', 'top.limit': '限速 {n}',
+    'arc.part': '分卷 {n}', 'arc.sets': '分卷压缩包', 'arc.missing': '缺第 {list} 卷', 'arc.complete': '完整', 'dl.done': '已下载',
+    'wf.report': '导出报告', 'wf.rerun': '重跑', 'wf.rerunConfirm': '按原参数重新执行这条工作流的全部步骤？下载仍需遵守批准规则。', 'wf.rerunStarted': '已开始重跑',
+    'update.available': '新版本 v{v} 可用 →',
+    'n.done': '下载完成', 'n.failed': '下载失败', 'n.approval': '有下载等待批准', 'n.wf': '工作流已结束', 'n.denied': '浏览器拒绝了通知权限',
+    'browse.addedParts': '，含自动补齐的 {n} 个分卷',
   },
   en: {
     'nav.section': 'Workspace', 'page.workflow': 'Workflows', 'page.browse': 'Browse', 'page.library': 'Library', 'page.tasks': 'Tasks',
@@ -184,6 +196,15 @@ const I18N = {
     'who.system': 'system', 'who.console': 'console', 'who.download': 'download', 'who.export': 'export', 'who.index': 'index',
     'common.cancel': 'Cancel', 'common.close': 'Close', 'common.unknown': 'unknown', 'common.ago': 'ago', 'common.none': 'none',
     'kpi.idle': 'idle',
+    'set.speedLimit': 'Speed limit (KB/s, 0 = unlimited)', 'set.winStart': 'Download from', 'set.winEnd': 'until', 'set.dedupe': 'Skip files already downloaded from another chat',
+    'set.notify': 'Notifications & updates', 'set.notifyDesc': 'Get told when downloads finish, need approval, or a workflow ends.', 'set.desktopNotify': 'Desktop notifications in this browser', 'set.checkUpdates': 'Check GitHub for new versions once a day',
+    'wait.flood': 'rate-limited {n}s', 'wait.reconnecting': 'reconnecting', 'wait.window': 'waiting for download hours', 'wait.stalled': 'stalled, reconnected',
+    'top.window': 'outside download hours', 'top.limit': 'limit {n}',
+    'arc.part': 'vol. {n}', 'arc.sets': 'Split archives', 'arc.missing': 'missing {list}', 'arc.complete': 'complete', 'dl.done': 'downloaded',
+    'wf.report': 'Export report', 'wf.rerun': 'Re-run', 'wf.rerunConfirm': 'Run every step of this workflow again with the same arguments? Downloads still follow the approval rules.', 'wf.rerunStarted': 'Re-run started',
+    'update.available': 'v{v} is available →',
+    'n.done': 'Download finished', 'n.failed': 'Download failed', 'n.approval': 'A download needs approval', 'n.wf': 'Workflow finished', 'n.denied': 'The browser blocked notifications',
+    'browse.addedParts': ', including {n} more volume(s) of split archives',
   },
 };
 let LANG = 'en';
@@ -205,13 +226,14 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 function size(n) {
   n = Number(n) || 0;
+  if (!isFinite(n) || n < 1024) return '0 KB';   // anything under 1 KB (incl. decaying speeds) shows as 0 KB
   const u = ['B', 'KB', 'MB', 'GB', 'TB'];
   let i = 0;
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-  return i === 0 ? `${n} B` : `${n.toFixed(n >= 100 ? 0 : n >= 10 ? 1 : 2)} ${u[i]}`;
+  return `${n.toFixed(n >= 100 ? 0 : n >= 10 ? 1 : 2)} ${u[i]}`;
 }
 function dur(s) {
-  if (s == null || !isFinite(s)) return '';
+  if (s == null || !isFinite(s) || s > 86400 * 365) return '';   // no meaningful ETA beyond a year
   s = Math.max(0, Math.round(s));
   const zh = LANG === 'zh';
   if (s < 60) return zh ? `${s} 秒` : `${s}s`;
@@ -258,6 +280,24 @@ const statusTag = s => `<span class="tag ${ST_TAG[s] ?? ''}">${t('st.' + s)}</sp
 const WF_TAG = { active: 'info', done: 'ok', failed: 'err', idle: '', canceled: '' };
 const wfTag = s => `<span class="tag ${WF_TAG[s] ?? ''}">${t('status.' + s)}</span>`;
 const pct = tk => tk.total ? Math.min(100, tk.done / tk.total * 100) : (tk.status === 'done' ? 100 : 0);
+function waitText(tk) {
+  if (!tk.wait_reason) return '';
+  if (tk.wait_reason === 'flood') {
+    const left = Math.max(0, Math.round((tk.wait_until || 0) - Date.now() / 1000));
+    return left ? t('wait.flood', { n: left }) : '';
+  }
+  return t('wait.' + tk.wait_reason);
+}
+function fileTags(f) {
+  const out = [];
+  if (f.archive) out.push(`<span class="tag plain" title="${esc(f.archive.set)}">${icon('layers')}${t('arc.part', { n: f.archive.part })}</span>`);
+  if (f.downloaded) out.push(`<span class="tag ok">${t('dl.done')}</span>`);
+  return out.join('');
+}
+function archiveSets(sets) {
+  if (!sets || !sets.length) return '';
+  return `<div class="label" style="margin-top:6px">${t('arc.sets')}</div><div class="sets">${sets.map(g => `<span class="set-chip ${g.missing.length ? 'missing' : ''}" title="${esc(g.set)}">${icon('layers')}<span>${esc(g.set)}</span><b class="num" style="font-size:14px">${g.count}</b>${g.missing.length ? ` · ${esc(t('arc.missing', { list: g.missing.slice(0, 6).join(',') + (g.missing.length > 6 ? '…' : '') }))}` : ''}</span>`).join('')}</div>`;
+}
 
 function toast(msg, ok = true) {
   const el = document.createElement('div');
@@ -311,6 +351,6 @@ const S = {
   b: { account: '', kind: 'all', q: '', dialogs: [], chat: null, info: null, tab: 'files', files: [], fileCursor: null,
        fileSummary: null, msgs: [], msgCursor: null, selected: new Set(), f: { types: [], name: '', ext: '', min: '', max: '' }, loading: false },
   lib: { q: '', types: [], ext: '', min: '', max: '', sort: 'date', chat: '', results: null, index: [], cmp: null },
-  qr: {},
+  qr: {}, update: {},
 };
 const toolTitle = name => { const m = S.toolsMeta[name]; return m ? (LANG === 'zh' ? m.title_zh : m.title_en) : name; };

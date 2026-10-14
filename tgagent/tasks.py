@@ -18,13 +18,66 @@ from . import index, readers
 from .accounts import manager as accounts
 from .activity import bus
 from .config import EXPORTS_DIR, TASKS_FILE, settings
-from .fastdl import SenderPool, parallel_download
+from .db import db
+from .fastdl import RATE, SenderPool, parallel_download
 from .i18n import L
 from .workflow import current_step, workflows
 
 ACTIVE = ("queued", "running")
 FINAL = ("done", "failed", "canceled", "skipped")
 HUMAN_SOURCES = ("console",)
+STALL_SECONDS = 180          # a running download without progress for this long gets fresh connections
+TERMINAL_WAIT_STATES = FINAL + ("paused",)
+
+
+def downloaded_copy(file_id: int) -> dict | None:
+    """A previous download of the same Telegram file that still exists on disk."""
+    for r in db.all("SELECT * FROM downloads WHERE file_id=? ORDER BY finished DESC", (file_id,)):
+        try:
+            if r["path"] and Path(r["path"]).exists() and Path(r["path"]).stat().st_size == r["size"]:
+                return r
+        except OSError:
+            continue
+    return None
+
+
+def record_download(t: "Task") -> None:
+    db.upsert("downloads", {"file_id": t.file_id or None, "account": t.account, "chat_id": t.chat_id,
+                            "message_id": t.message_id, "chat_title": t.chat_title, "name": t.title,
+                            "path": t.path, "size": t.total, "finished": time.time()})
+
+
+def download_dir_problem() -> str:
+    """Why the download folder can't be used right now (e.g. its drive is disconnected), or ""."""
+    root = Path(settings.get("download_dir") or ".")
+    anchor = Path(root.anchor) if root.anchor else None
+    if anchor and not anchor.exists():
+        return L(f"下载目录 {root} 不可用：{root.anchor} 不存在（移动硬盘未连接？）。请连接后重试，或在设置中修改下载目录。",
+                 f"Download folder {root} is unavailable: {root.anchor} does not exist (drive disconnected?). "
+                 "Reconnect it or change the download folder in Settings.")
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return L(f"无法创建下载目录 {root}：{e}", f"Cannot create download folder {root}: {e}")
+    return ""
+
+
+def _hm(v: str) -> int | None:
+    try:
+        h, m = str(v).strip().split(":")
+        return int(h) * 60 + int(m)
+    except (ValueError, AttributeError):
+        return None
+
+
+def in_download_window(now: float | None = None) -> bool:
+    """Whether downloads may run now (settings download_window_start/end, local time, may wrap midnight)."""
+    a, b = _hm(settings.get("download_window_start") or ""), _hm(settings.get("download_window_end") or "")
+    if a is None or b is None or a == b:
+        return True
+    lt = time.localtime(now)
+    cur = lt.tm_hour * 60 + lt.tm_min
+    return a <= cur < b if a < b else (cur >= a or cur < b)
 
 
 @dataclass
@@ -53,12 +106,21 @@ class Task:
     workflow_id: str = ""
     step_id: str = ""
     batch: str = ""                # approval batch id
+    file_id: int = 0               # Telegram document/photo id (for de-duplication)
+    wait_reason: str = ""          # flood / reconnecting / window / stalled
+    wait_until: float = 0.0
+    restarts: int = 0
+    last_progress: float = 0.0
 
     def public(self) -> dict:
         d = asdict(self)
         d.pop("params", None)
         d["progress"] = round(self.done / self.total, 4) if self.total else (1.0 if self.status == "done" else 0.0)
-        d["eta"] = int((self.total - self.done) / self.speed) if self.speed > 0 and self.total else None
+        d["eta"] = int((self.total - self.done) / self.speed) if self.speed >= 1024 and self.total else None
+        if self.wait_until and self.wait_until < time.time():
+            d["wait_until"] = 0.0
+            if d["wait_reason"] == "flood":
+                d["wait_reason"] = ""
         if self.kind != "download":
             d["params"] = self.params
         return d
@@ -83,6 +145,7 @@ class TaskManager:
         self._wake = asyncio.Event()
         self._prev: dict[str, tuple[float, int]] = {}
         self._dirty = False
+        self.avg_speed = 0.0          # long-run average while downloading, for estimates
         self._load()
 
     # ---------------------------------------------------------------- persistence
@@ -149,6 +212,9 @@ class TaskManager:
                 remaining += max(0, t.total - t.done)
         s["speed"] = speed
         s["remaining_bytes"] = remaining
+        s["window_open"] = in_download_window()
+        s["speed_limit_kbps"] = int(settings.get("speed_limit_kbps") or 0)
+        s["avg_speed"] = self.avg_speed
         return s
 
     def approvals(self) -> list[dict]:
@@ -166,14 +232,10 @@ class TaskManager:
         return list(groups.values())
 
     # ---------------------------------------------------------------- downloads
-    async def enqueue_downloads(self, account: str | None, source: str, links: list[str] | None = None,
-                                chat: str | None = None, message_ids: list[int] | None = None,
-                                limit: int = 50, oldest_first: bool = False, subdir: str = "",
-                                include_album: bool = False, skip_approval: bool = False,
-                                min_id: int = 0, **filters) -> dict:
-        acc, client = await accounts.client(account)
+    async def _collect(self, client, acc, links=None, chat=None, message_ids=None, limit=50, oldest_first=False,
+                       include_album=False, complete_archives=True, min_id=0, **filters):
+        """Resolve a download request into candidate (entity, msg, chat_id, file_info) tuples plus skip reasons."""
         pairs: list[tuple[Any, Any]] = []
-
         for link in links or []:
             cr = readers.parse_ref(link)
             if not cr.msg_id:
@@ -204,8 +266,14 @@ class TaskManager:
                     around = await client.get_messages(entity, ids=list(range(msg.id - 10, msg.id + 11)))
                     extra += [(entity, m) for m in around if m and m.grouped_id == msg.grouped_id]
             pairs += extra
+        added_parts = 0
+        if complete_archives:
+            extra = await self._archive_siblings(client, acc.id, pairs)
+            added_parts = len(extra)
+            pairs += extra
 
         candidates, skipped, seen = [], [], set()
+        dedupe = bool(settings.get("dedupe_downloads"))
         for entity, msg in pairs:
             chat_id = readers.utils.get_peer_id(entity)
             if (chat_id, msg.id) in seen:
@@ -219,9 +287,84 @@ class TaskManager:
                         and t.chat_id == chat_id and t.message_id == msg.id
                         and t.status in ("approval", "queued", "running", "paused")), None)
             if dup:
-                skipped.append({"message_id": msg.id, "reason": L(f"已在队列中 ({dup.id})", f"already queued ({dup.id})")})
+                skipped.append({"message_id": msg.id, "name": fi["name"],
+                                "reason": L(f"已在队列中 ({dup.id})", f"already queued ({dup.id})")})
                 continue
+            file_id = getattr(msg.document or msg.photo, "id", None)
+            if dedupe and file_id:
+                prev = downloaded_copy(file_id)
+                if prev:
+                    origin = prev["chat_title"] or ""
+                    skipped.append({"message_id": msg.id, "name": fi["name"], "already_downloaded": prev["path"],
+                                    "reason": L(f"已下载过（{origin}）", f"already downloaded (from {origin})")})
+                    continue
             candidates.append((entity, msg, chat_id, fi))
+        return candidates, skipped, added_parts
+
+    async def _archive_siblings(self, client, account: str, pairs: list) -> list:
+        """Other volumes of split archives in the request (from the local index, then nearby messages)."""
+        have = {(readers.utils.get_peer_id(e), m.id) for e, m in pairs}
+        wanted: dict[tuple[int, str], Any] = {}
+        for entity, msg in pairs:
+            fi = readers.file_info(msg)
+            if fi and fi.get("archive"):
+                wanted.setdefault((readers.utils.get_peer_id(entity), fi["archive"]["set"].lower()), (entity, msg))
+        extra = []
+        for (chat_id, set_name), (entity, msg) in wanted.items():
+            ids = set()
+            stem = set_name.rsplit(".", 1)[0]
+            for r in db.all("SELECT message_id, name FROM files WHERE account=? AND chat_id=? AND name_lc LIKE ?",
+                            (account, chat_id, f"{stem}%")):
+                si = readers.split_info(r["name"])
+                if si and si["set"].lower() == set_name:
+                    ids.add(r["message_id"])
+            around = list(range(max(1, msg.id - 40), msg.id + 41))
+            fetched = await client.get_messages(entity, ids=sorted(set(around) | ids))
+            for m in fetched:
+                if not m or (chat_id, m.id) in have:
+                    continue
+                fi = readers.file_info(m)
+                if fi and fi.get("archive") and fi["archive"]["set"].lower() == set_name:
+                    extra.append((entity, m))
+                    have.add((chat_id, m.id))
+        return extra
+
+    async def plan_download(self, account: str | None, source: str, **req) -> dict:
+        """Dry run of a download request: what would be queued, how big, how long, whether it needs approval."""
+        acc, client = await accounts.client(account)
+        candidates, skipped, added = await self._collect(client, acc, **req)
+        total = sum(fi["size"] for *_, fi in candidates)
+        rows = [readers.file_row(m, e, fi) for e, m, _, fi in candidates]
+        by_kind: dict[str, int] = {}
+        for r in rows:
+            by_kind[r["kind"]] = by_kind.get(r["kind"], 0) + 1
+        speed = self.avg_speed
+        return {
+            "file_count": len(candidates), "total_size": total, "total_size_human": readers.human_size(total),
+            "by_kind": by_kind, "download_dir_problem": download_dir_problem(),
+            "archive_sets": [{k: v for k, v in g.items() if k != "message_ids"} for g in readers.archive_sets(rows)],
+            "added_archive_parts": added,
+            "skipped": skipped[:50], "skipped_count": len(skipped),
+            "already_downloaded": sum(1 for s in skipped if s.get("already_downloaded")),
+            "needs_approval": source not in HUMAN_SOURCES and bool(candidates) and self._over_limit(len(candidates), total),
+            "estimated_seconds": int(total / speed) if speed > 0 else None,
+            "estimate_basis": (f"{readers.human_size(speed)}/s recent average" if speed > 0
+                               else "no recent downloads to estimate from"),
+            "sample": rows[:20],
+        }
+
+    async def enqueue_downloads(self, account: str | None, source: str, links: list[str] | None = None,
+                                chat: str | None = None, message_ids: list[int] | None = None,
+                                limit: int = 50, oldest_first: bool = False, subdir: str = "",
+                                include_album: bool = False, skip_approval: bool = False,
+                                min_id: int = 0, complete_archives: bool = True, **filters) -> dict:
+        problem = download_dir_problem()
+        if problem:
+            raise ValueError(problem)
+        acc, client = await accounts.client(account)
+        candidates, skipped, added_parts = await self._collect(
+            client, acc, links=links, chat=chat, message_ids=message_ids, limit=limit, oldest_first=oldest_first,
+            include_album=include_album, complete_archives=complete_archives, min_id=min_id, **filters)
 
         total = sum(fi["size"] for *_, fi in candidates)
         need_approval = (not skip_approval and source not in HUMAN_SOURCES and candidates
@@ -233,6 +376,7 @@ class TaskManager:
                           status="approval" if need_approval else "queued", batch=batch,
                           chat_id=chat_id, chat_title=readers.chat_title(entity), message_id=msg.id,
                           file_kind=fi["kind"], total=fi["size"],
+                          file_id=getattr(msg.document or msg.photo, "id", 0) or 0,
                           params={"subdir": subdir, "date": readers.iso(msg.date)})
             t.path = str(self._dest_path(t, fi["name"]))
             created.append(t)
@@ -251,18 +395,19 @@ class TaskManager:
             "queued": 0 if need_approval else len(created), "total_size": total,
             "total_size_human": readers.human_size(total), "download_dir": settings.get("download_dir"),
             "tasks": [{"task_id": t.id, "name": t.title, "size": t.total, "path": t.path} for t in created],
+            "added_archive_parts": added_parts,
             "skipped": skipped,
         }
         if need_approval:
             out.update({
                 "requires_approval": True, "approval_batch": batch, "awaiting_approval": len(created),
-                "hint": L("超过自动下载限额，已等待用户在 Web 控制台批准。告诉用户去控制台批准，之后可用 tg_tasks 查看状态。",
+                "hint": L("超过自动下载限额，已等待用户在 Web 控制台批准。告诉用户去控制台批准，之后可用 tg_wait_tasks 等待结果。",
                           "Over the auto-download limit: waiting for the user to approve it in the web console. "
-                          "Tell the user, then check progress with tg_tasks."),
+                          "Tell the user, then use tg_wait_tasks to wait for the result."),
             })
         else:
-            out["hint"] = L("用 tg_tasks 查看进度；用户可在 Web 控制台实时查看",
-                            "Use tg_tasks to follow progress; the user sees it live in the web console")
+            out["hint"] = L("用 tg_wait_tasks 等待完成（无需反复轮询）；用户可在 Web 控制台实时查看",
+                            "Use tg_wait_tasks to wait for completion (no need to poll); the user sees it live in the console")
         return out
 
     @staticmethod
@@ -359,6 +504,8 @@ class TaskManager:
                 pass
 
     def _schedule(self) -> None:
+        if not in_download_window():
+            return
         limit = max(1, int(settings.get("max_concurrent_files") or 2))
         running = sum(1 for i in self._running if self.tasks.get(i) and self.tasks[i].kind == "download")
         queued = sorted((t for t in self.tasks.values() if t.kind == "download" and t.status == "queued"),
@@ -383,11 +530,30 @@ class TaskManager:
                 if not t:
                     continue
                 if t.kind == "download":
+                    if not t.last_progress:
+                        t.last_progress = now
                     pt, pd = self._prev.get(tid, (now - 1, t.done))
                     inst = max(0.0, (t.done - pd) / max(0.001, now - pt))
                     t.speed = inst if t.speed == 0 else t.speed * 0.6 + inst * 0.4
+                    if t.speed < 1024:   # stalled: the moving average would otherwise decay forever (1e-21 B/s)
+                        t.speed = 0.0
+                    if t.done > pd:
+                        t.last_progress = now
+                    waiting = t.wait_reason == "flood" and t.wait_until > now
+                    if not waiting and now - t.last_progress > STALL_SECONDS:
+                        asyncio.create_task(self._restart_stalled(t))
                     self._prev[tid] = (now, t.done)
                 bus.emit("task", t.public())
+            total_speed = sum(self.tasks[i].speed for i in self._running if i in self.tasks and self.tasks[i].kind == "download")
+            if total_speed > 0:
+                self.avg_speed = total_speed if not self.avg_speed else self.avg_speed * 0.97 + total_speed * 0.03
+            RATE.rate = int(settings.get("speed_limit_kbps") or 0) * 1024
+            if not in_download_window():
+                for tid in [i for i in self._running if self.tasks.get(i) and self.tasks[i].kind == "download"]:
+                    t = self.tasks[tid]
+                    await self._stop(t, "queued")
+                    t.wait_reason = "window"
+                    self._changed(t)
             bus.emit("stats", self.stats())
             if self._dirty:
                 self.save()
@@ -400,7 +566,51 @@ class TaskManager:
         pool = self._pools.get(acc_id)
         if not pool or pool.client is not client:
             pool = self._pools[acc_id] = SenderPool(client)
+        pool.limiter.set_max(max(1, int(settings.get("max_concurrent_files") or 2))
+                             * max(1, int(settings.get("connections_per_file") or 4)))
         return pool
+
+    async def _restart_stalled(self, t: Task) -> None:
+        """No progress for a long time: drop this account's extra connections and requeue (resumes from .part)."""
+        if t.status != "running":
+            return
+        await self._stop(t, "queued")
+        t.restarts += 1
+        t.wait_reason, t.last_progress = "stalled", time.time()
+        pool = self._pools.get(t.account)
+        if pool:
+            await pool.close_all()
+        bus.log("warn", "download", L(f"下载停滞，已重新连接：{t.title}", f"Download stalled, reconnecting: {t.title}"), task_id=t.id)
+        self._changed(t)
+        self._wake.set()
+
+    async def wait_tasks(self, ids: list[str], timeout: float = 300, progress=None) -> dict:
+        """Block until the given tasks finish (or need the user), reporting progress along the way."""
+        ids = [i for i in ids if i in self.tasks]
+        if not ids:
+            raise ValueError("No such task ids")
+        end = time.time() + max(1.0, min(float(timeout or 300), 1800))
+        while True:
+            ts = [self.tasks[i] for i in ids if i in self.tasks]
+            settled = all(t.status in TERMINAL_WAIT_STATES or t.status == "approval" for t in ts)
+            total = sum(t.total for t in ts if t.kind == "download") or 0
+            done = sum(t.done for t in ts if t.kind == "download")
+            if progress:
+                fin = sum(1 for t in ts if t.status in FINAL)
+                try:
+                    await progress(done if total else fin, total or len(ts),
+                                   f"{fin}/{len(ts)} finished · {readers.human_size(sum(t.speed for t in ts))}/s")
+                except Exception:
+                    pass
+            if settled or time.time() >= end:
+                break
+            await asyncio.sleep(2)
+        counts: dict[str, int] = {}
+        for t in ts:
+            counts[t.status] = counts.get(t.status, 0) + 1
+        return {"finished": settled, "timed_out": not settled, "counts": counts,
+                "tasks": [t.public() for t in ts],
+                "hint": ("" if settled else "Still running; call tg_wait_tasks again to keep waiting.")}
 
     async def _run_download(self, t: Task) -> None:
         path = Path(t.path)
@@ -411,8 +621,11 @@ class TaskManager:
             msg = await client.get_messages(entity, ids=t.message_id)
             if not msg or not msg.media:
                 raise ValueError(L("消息已删除或不再包含文件", "Message deleted or no longer has a file"))
+            if not t.file_id:
+                t.file_id = getattr(msg.document or msg.photo, "id", 0) or 0
             if path.exists() and path.stat().st_size == t.total:
                 t.status, t.done, t.note = "skipped", t.total, L("文件已存在", "already exists")
+                record_download(t)
                 return
             path.parent.mkdir(parents=True, exist_ok=True)
             t.done = 0
@@ -420,6 +633,14 @@ class TaskManager:
 
             def progress(n: int) -> None:
                 t.done += n
+                t.last_progress = time.time()
+
+            def on_state(reason, until) -> None:
+                if reason != t.wait_reason or (until or 0) != t.wait_until:
+                    t.wait_reason, t.wait_until = reason or "", until or 0.0
+                    self._changed(t)
+
+            t.wait_reason, t.wait_until, t.last_progress = "", 0.0, time.time()
 
             media = msg.document or msg.photo
             if isinstance(media, types.Document):
@@ -438,7 +659,7 @@ class TaskManager:
                     bus.log(level, "download", f"{t.title}: {text}", task_id=t.id)
 
                 await parallel_download(self._pool(acc.id, client), media, part, conns, part_size,
-                                        progress, refresh, on_event)
+                                        progress, refresh, on_event, on_state)
             else:
                 t.connections = 1
                 last = [0]
@@ -457,6 +678,8 @@ class TaskManager:
                 t.path = str(path)
             part.replace(path)
             t.status = "done"
+            t.wait_reason = ""
+            record_download(t)
             bus.log("success", "download", L(f"下载完成：{t.title}", f"Downloaded: {t.title}"),
                     f"{readers.human_size(t.total)} · {int(time.time() - (t.started or time.time()))}s", task_id=t.id)
         except asyncio.CancelledError:

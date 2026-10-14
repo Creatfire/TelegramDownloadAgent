@@ -2,6 +2,7 @@
 Every call is recorded as a step of a workflow so the user can follow it live."""
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
@@ -15,7 +16,7 @@ from .config import settings
 from .i18n import L, lang
 from .tasks import get_tasks
 from .watch import watches
-from .workflow import current_step, workflows
+from .workflow import current_step, progress_reporter, workflows
 
 ACCOUNT = {"type": "string", "description": "Account id (see tg_list_accounts). Defaults to the default account."}
 CHAT = {"type": "string", "description": "Chat: @username, username, t.me link, t.me/c/<id> link, or numeric id such as -100123…"}
@@ -141,11 +142,25 @@ async def h_export(args, ctx):
 async def h_download(args, ctx):
     if not args.get("links") and not args.get("chat"):
         raise ValueError("Provide links, or chat (optionally with message_ids or filters).")
-    return await get_tasks().enqueue_downloads(
-        args.get("account"), ctx.source, links=args.get("links"), chat=args.get("chat"),
-        message_ids=args.get("message_ids"), limit=args.get("limit", 50),
-        oldest_first=bool(args.get("oldest_first")), subdir=args.get("subdir", ""),
-        include_album=bool(args.get("include_album")), **_filters(args))
+    return await get_tasks().enqueue_downloads(args.get("account"), ctx.source, subdir=args.get("subdir", ""),
+                                               **_dl_request(args))
+
+
+def _dl_request(args: dict) -> dict:
+    return dict(links=args.get("links"), chat=args.get("chat"), message_ids=args.get("message_ids"),
+                limit=args.get("limit", 50), oldest_first=bool(args.get("oldest_first")),
+                include_album=bool(args.get("include_album")),
+                complete_archives=args.get("complete_archives", True), **_filters(args))
+
+
+async def h_plan(args, ctx):
+    if not args.get("links") and not args.get("chat"):
+        raise ValueError("Provide links, or chat (optionally with message_ids or filters).")
+    return await get_tasks().plan_download(args.get("account"), ctx.source, **_dl_request(args))
+
+
+async def h_wait(args, ctx):
+    return await get_tasks().wait_tasks(args.get("task_ids") or [], args.get("timeout_s", 120), progress_reporter.get())
 
 
 async def h_tasks(args, ctx):
@@ -315,8 +330,29 @@ TOOLS: list[Tool] = [
                          "limit": {"type": "integer", "default": 50, "maximum": 5000, "description": "Max files when downloading by filter"},
                          "oldest_first": {"type": "boolean"},
                          "include_album": {"type": "boolean", "description": "Also download the other items of albums"},
+                         "complete_archives": {"type": "boolean", "default": True,
+                                               "description": "For split archives (x.7z.001, x.part1.rar…) also queue the other volumes"},
                          "subdir": {"type": "string", "description": "Sub-folder under the download directory"}}},
          h_download, DL_SUMMARY, read_only=False),
+    Tool("tg_plan_download", "下载预估", "Plan download",
+         "Dry run of tg_download with the same arguments: how many files, total size, split-archive sets (and missing "
+         "volumes), files already downloaded elsewhere, whether approval will be needed, and an estimated duration. "
+         "Nothing is queued. Use it before large downloads.",
+         {"properties": {"account": ACCOUNT,
+                         "links": {"type": "array", "items": {"type": "string"}},
+                         "chat": CHAT, "message_ids": {"type": "array", "items": {"type": "integer"}},
+                         **FILE_FILTERS,
+                         "limit": {"type": "integer", "default": 50, "maximum": 5000},
+                         "oldest_first": {"type": "boolean"}, "include_album": {"type": "boolean"},
+                         "complete_archives": {"type": "boolean", "default": True}}},
+         h_plan, lambda r: L(f"{r['file_count']} 个文件 · {r['total_size_human']}", f"{r['file_count']} files · {r['total_size_human']}")),
+    Tool("tg_wait_tasks", "等待任务", "Wait for tasks",
+         "Wait until the given tasks finish (or need the user's approval), up to timeout_s, and return their final "
+         "state. Sends progress notifications when the client supports them. Use this instead of polling tg_tasks.",
+         {"properties": {"task_ids": {"type": "array", "items": {"type": "string"}},
+                         "timeout_s": {"type": "integer", "default": 120, "maximum": 1800}},
+          "required": ["task_ids"]},
+         h_wait, lambda r: ", ".join(f"{k}×{v}" for k, v in r["counts"].items())),
     Tool("tg_tasks", "查看任务", "Tasks",
          "Status, progress, speed and ETA of download/export/index tasks, overall stats, and batches waiting for approval.",
          {"properties": {"status": {"type": "string", "enum": ["all", "active", "approval", "queued", "running", "paused", "done", "failed", "canceled", "skipped"], "default": "all"},
@@ -426,6 +462,7 @@ async def call_tool(name: str, args: dict | None, source: str = "agent", session
     except RPCError as e:
         msg = f"Telegram error: {e}"
     except Exception as e:
+        logging.getLogger("tgagent.tools").exception("tool %s failed", name)
         msg = f"{type(e).__name__}: {e}"
     finally:
         current_step.reset(token)

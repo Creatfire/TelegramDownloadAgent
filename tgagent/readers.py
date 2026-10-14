@@ -10,6 +10,7 @@ from telethon import TelegramClient, utils
 from telethon.tl import functions, types
 
 from . import index
+from .db import db as _db
 from .config import settings
 
 # ---------------------------------------------------------------- link parsing
@@ -182,7 +183,57 @@ def file_info(msg) -> dict | None:
         info["duration"] = int(f.duration)
     if f.width and f.height:
         info["resolution"] = f"{f.width}x{f.height}"
+    arc = split_info(name)
+    if arc:
+        info["archive"] = arc
     return info
+
+
+# ---------------------------------------------------------------- split archives
+_SPLIT_PATTERNS = [
+    re.compile(r"^(?P<base>.+\.(?:7z|zip|rar|tar|gz|tgz|bz2|xz|iso|bin))\.(?P<part>\d{2,4})$", re.I),   # x.7z.001
+    re.compile(r"^(?P<stem>.+)\.part(?P<part>\d{1,4})\.(?P<ext>rar|exe)$", re.I),                     # x.part1.rar
+    re.compile(r"^(?P<stem>.+)\.z(?P<part>\d{2})$", re.I),                                            # x.z01 (+ x.zip)
+    re.compile(r"^(?P<base>.+)\.(?P<part>\d{3})$"),                                                   # x.001
+]
+
+
+def split_info(name: str) -> dict | None:
+    """Detect volumes of a split archive. Returns {"set": <name of the whole archive>, "part": n} or None."""
+    for i, rx in enumerate(_SPLIT_PATTERNS):
+        m = rx.match(name or "")
+        if not m:
+            continue
+        part = int(m.group("part"))
+        if i == 1:
+            return {"set": f"{m.group('stem')}.{m.group('ext').lower()}", "part": part}
+        if i == 2:
+            return {"set": f"{m.group('stem')}.zip", "part": part}
+        return {"set": m.group("base"), "part": part}
+    return None
+
+
+def archive_sets(files: list[dict]) -> list[dict]:
+    """Group file rows (with an "archive" field) into sets and report missing volumes."""
+    sets: dict[str, dict] = {}
+    for f in files:
+        a = f.get("archive")
+        if not a:
+            continue
+        g = sets.setdefault(a["set"], {"set": a["set"], "parts": [], "size": 0, "message_ids": []})
+        g["parts"].append(a["part"])
+        g["size"] += f.get("size", 0)
+        g["message_ids"].append(f.get("message_id"))
+    out = []
+    for g in sets.values():
+        parts = sorted(set(g["parts"]))
+        first = 0 if 0 in parts else 1
+        g["parts"] = parts
+        g["count"] = len(parts)
+        g["missing"] = [n for n in range(first, parts[-1] + 1) if n not in parts][:50]
+        g["size_human"] = human_size(g["size"])
+        out.append(g)
+    return sorted(out, key=lambda g: g["set"].lower())
 
 
 def sender_brief(msg) -> dict | None:
@@ -223,6 +274,8 @@ def message_dict(msg, entity, text_max: int | None = 500) -> dict:
 
 
 def human_size(n: float) -> str:
+    if not n or n < 1024:
+        return "0 KB"
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024 or unit == "TB":
             return f"{n:.0f} {unit}" if unit == "B" else f"{n:.2f} {unit}"
@@ -486,7 +539,11 @@ async def list_files(client: TelegramClient, chat: str, limit: int = 100, offset
         scanned += 1
         last_id = msg.id
         if fi:
-            files.append(file_row(msg, entity, fi))
+            row = file_row(msg, entity, fi)
+            fid = getattr(msg.document or msg.photo, "id", None)
+            if fid and _db.one("SELECT 1 FROM downloads WHERE file_id=?", (fid,)):
+                row["downloaded"] = True
+            files.append(row)
             total += fi["size"]
             by_kind[fi["kind"]] = by_kind.get(fi["kind"], 0) + 1
             if len(files) >= limit:
@@ -497,6 +554,7 @@ async def list_files(client: TelegramClient, chat: str, limit: int = 100, offset
     return {
         "chat": chat_brief(entity),
         "count": len(files), "total_size": total, "total_size_human": human_size(total), "by_kind": by_kind,
+        "archive_sets": [{k: v for k, v in g.items() if k != "message_ids"} for g in archive_sets(files)],
         "scanned_messages": scanned,
         "next_offset_id": None if exhausted else last_id,
         "hint": ("Scanned to the end" if exhausted else

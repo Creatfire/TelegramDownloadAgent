@@ -25,7 +25,10 @@ from .i18n import L
 # The step currently executing (used by tasks.py to attach downloads to it)
 current_step: contextvars.ContextVar["Step | None"] = contextvars.ContextVar("current_step", default=None)
 
-POLL_TOOLS = {"tg_tasks", "tg_list_accounts", "tg_index_status"}
+POLL_TOOLS = {"tg_tasks", "tg_wait_tasks", "tg_list_accounts", "tg_index_status"}
+
+# Set by the MCP layer when the client asked for progress notifications: async (progress, total, message)
+progress_reporter: contextvars.ContextVar = contextvars.ContextVar("progress_reporter", default=None)
 MAX_RESULT_CHARS = 20000
 
 
@@ -123,20 +126,24 @@ def produced_refs(result: Any) -> set[str]:
     chat(result.get("chat"))
     if "title" in result and "type" in result:     # tg_resolve_chat
         chat(result)
-    for d in result.get("dialogs", []) or []:
+    def items(key):
+        v = result.get(key)
+        return [x for x in v if isinstance(x, dict)] if isinstance(v, list) else []
+
+    for d in items("dialogs"):
         chat(d)
-    for m in result.get("messages", []) or []:
+    for m in items("messages"):
         refs.add(f"m:{m.get('id')}")
         chat(m.get("chat"))
-    for f in result.get("files", []) or []:
+    for f in items("files") + items("sample"):
         refs.add(f"m:{f.get('message_id')}")
         if f.get("chat_id") is not None:
             refs.add(f"c:{f['chat_id']}")
     if result.get("id") is not None and "date" in result:   # tg_get_message
         refs.add(f"m:{result['id']}")
-    for a in result.get("album_items", []) or []:
+    for a in items("album_items"):
         refs.add(f"m:{a.get('id')}")
-    for t in result.get("tasks", []) or []:
+    for t in items("tasks"):
         tid = t.get("task_id") or t.get("id")
         if tid:
             refs.add(f"t:{tid}")

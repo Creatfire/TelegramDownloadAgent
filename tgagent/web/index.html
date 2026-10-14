@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TG Agent</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2317171b'/%3E%3Cpath d='M8 15.5l16-6.5-2.8 15-5-3.6-2.7 2.6v-4.2l7.2-6.8-9.1 5.5z' fill='none' stroke='%23e2b36e' stroke-width='1.6' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
 <script>try{const t=localStorage.getItem('tga-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
 </head>
@@ -15,6 +15,7 @@
       <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3 11.5l18-7.5-3.2 17-5.6-4-3 2.9v-4.7l8-7.6-10.2 6.2z"/></svg></div>
       <div><div class="brand-name">TG Agent</div><div class="brand-sub">TELEGRAM × AI</div></div>
     </div>
+    <div class="stripes"><span></span><span></span><span></span></div>
     <div class="nav-label label" data-i18n="nav.section">Workspace</div>
     <nav id="nav">
       <a href="#workflow" data-page="workflow"><i data-icon="flow"></i><span data-i18n="page.workflow">Workflows</span><b class="nav-badge warn" id="nav-wf-badge"></b><kbd>1</kbd></a>
@@ -27,10 +28,13 @@
       <a href="#settings" data-page="settings"><i data-icon="gear"></i><span data-i18n="page.settings">Settings</span><kbd>8</kbd></a>
     </nav>
     <div class="sidebar-foot">
-      <div class="conn" id="conn"><span class="dot"></span><span id="conn-text">…</span></div>
-      <div class="foot-right">
-        <div class="lang-switch" id="lang-switch"><button data-lang="zh">中</button><button data-lang="en">EN</button></div>
-        <button class="icon-btn" id="theme-btn" title="Theme"><i data-icon="moon"></i></button>
+      <a class="update-note" id="update-note" target="_blank"></a>
+      <div class="foot-row">
+        <div class="conn" id="conn"><span class="dot"></span><span id="conn-text">…</span></div>
+        <div class="foot-right">
+          <div class="lang-switch" id="lang-switch"><button data-lang="zh">中</button><button data-lang="en">EN</button></div>
+          <button class="icon-btn" id="theme-btn" title="Theme"><i data-icon="moon"></i></button>
+        </div>
       </div>
     </div>
   </aside>
@@ -39,8 +43,9 @@
     <header class="topbar">
       <div><div class="crumb label" id="page-crumb">TG AGENT</div><h1 id="page-title"></h1></div>
       <div class="topbar-right">
+        <div class="mini-pill warn" id="top-window" hidden><i data-icon="clock"></i><span></span></div>
         <div class="mini-pill" id="top-active" title="running / queued"><i data-icon="download"></i><span>0 / 0</span></div>
-        <div class="speed-pill"><i data-icon="bolt"></i><span id="top-speed">0 B/s</span></div>
+        <div class="speed-pill crt"><i data-icon="bolt"></i><span id="top-speed">0 KB/s</span></div>
         <div class="acc-pill" id="top-account"></div>
       </div>
     </header>
@@ -174,7 +179,20 @@
               <label><span data-i18n="set.conns">Connections per file</span><input name="connections_per_file" type="number" min="1" max="16"></label>
               <label><span data-i18n="set.part">Part size (KB)</span><select name="part_size_kb"><option>128</option><option>256</option><option>512</option><option>1024</option></select></label>
             </div>
+            <div class="row-3">
+              <label><span data-i18n="set.speedLimit">Speed limit (KB/s, 0 = unlimited)</span><input name="speed_limit_kbps" type="number" min="0"></label>
+              <label><span data-i18n="set.winStart">Download from</span><input name="download_window_start" type="time"></label>
+              <label><span data-i18n="set.winEnd">until</span><input name="download_window_end" type="time"></label>
+            </div>
+            <label class="check"><input type="checkbox" name="dedupe_downloads"><span data-i18n="set.dedupe">Skip files already downloaded from another chat</span></label>
             <p class="note"><i data-icon="info"></i><span data-i18n="set.note"></span></p>
+          </div>
+        </div>
+        <div class="set-group">
+          <div><h3 data-i18n="set.notify">Notifications &amp; updates</h3><div class="set-desc" data-i18n="set.notifyDesc"></div></div>
+          <div class="set-fields">
+            <label class="check"><input type="checkbox" id="notify-toggle"><span data-i18n="set.desktopNotify">Desktop notifications in this browser</span></label>
+            <label class="check"><input type="checkbox" name="check_updates"><span data-i18n="set.checkUpdates">Check GitHub for new versions once a day</span></label>
           </div>
         </div>
         <div class="set-group">
@@ -207,6 +225,7 @@
 <div class="login-screen" id="login-screen">
   <div class="card login-card">
     <div class="brand" style="padding:0"><div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3 11.5l18-7.5-3.2 17-5.6-4-3 2.9v-4.7l8-7.6-10.2 6.2z"/></svg></div><div class="brand-name">TG Agent</div></div>
+    <div class="stripes" style="padding:0"><span></span><span></span><span></span></div>
     <h3 style="margin:0" data-i18n="login.title">Access token required</h3>
     <p class="muted small" style="margin:0" data-i18n="login.desc"></p>
     <form id="login-form" style="display:flex;gap:8px"><input id="login-token" class="mono" data-i18n-ph="login.ph" placeholder="token" autocomplete="off"><button class="btn primary" type="submit" data-i18n="login.go">Unlock</button></form>
