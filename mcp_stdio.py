@@ -1,0 +1,10 @@
+"""Compatibility shim: run the stdio MCP bridge from a source checkout (python mcp_stdio.py)."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from tgagent.mcp_stdio import main  # noqa: E402
+
+if __name__ == "__main__":
+    main()

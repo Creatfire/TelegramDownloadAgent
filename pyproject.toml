@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tg-agent"
+dynamic = ["version"]
+description = "Let AI agents (Claude Code, Codex, Cursor…) read Telegram and download files fast through MCP, with a live web console."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Creatfire" }]
+keywords = ["telegram", "mcp", "ai-agent", "telethon", "downloader", "claude", "codex"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Environment :: Web Environment",
+    "Topic :: Communications :: Chat",
+]
+dependencies = [
+    "telethon>=1.40",
+    "cryptg>=0.4",
+    "python-socks[asyncio]>=2.4",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "mcp>=2.0",
+    "httpx>=0.27",
+    "qrcode>=7.4",
+    "keyring>=24; sys_platform != 'win32'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pyinstaller>=6"]
+
+[project.scripts]
+tg-agent = "tgagent.cli:main"
+tg-agent-mcp = "tgagent.mcp_stdio:main"
+
+[project.urls]
+Homepage = "https://github.com/Creatfire/TelegramDownloadAgent"
+
+[tool.setuptools]
+packages = ["tgagent"]
+
+[tool.setuptools.package-data]
+tgagent = ["web/*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "tgagent.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

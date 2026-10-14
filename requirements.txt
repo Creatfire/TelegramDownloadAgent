@@ -1,0 +1,9 @@
+telethon>=1.40
+cryptg>=0.4
+python-socks[asyncio]>=2.4
+fastapi>=0.110
+uvicorn[standard]>=0.29
+mcp>=2.0
+httpx>=0.27
+qrcode>=7.4
+keyring>=24; sys_platform != 'win32'

@@ -1,0 +1,16 @@
+.venv/
+data/
+downloads/
+build/
+dist/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+*.session
+*.session-journal
+*.part
+*.part.json
+# local notes that contain credentials
+Telegram登录流程与API文档.md
+*登录*.md
+build.log

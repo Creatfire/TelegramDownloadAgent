@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TG Agent</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2317171b'/%3E%3Cpath d='M8 15.5l16-6.5-2.8 15-5-3.6-2.7 2.6v-4.2l7.2-6.8-9.1 5.5z' fill='none' stroke='%23e2b36e' stroke-width='1.6' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/style.css">
+<script>try{const t=localStorage.getItem('tga-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3 11.5l18-7.5-3.2 17-5.6-4-3 2.9v-4.7l8-7.6-10.2 6.2z"/></svg></div>
+      <div><div class="brand-name">TG Agent</div><div class="brand-sub">TELEGRAM × AI</div></div>
+    </div>
+    <div class="nav-label label" data-i18n="nav.section">Workspace</div>
+    <nav id="nav">
+      <a href="#workflow" data-page="workflow"><i data-icon="flow"></i><span data-i18n="page.workflow">Workflows</span><b class="nav-badge warn" id="nav-wf-badge"></b><kbd>1</kbd></a>
+      <a href="#browse" data-page="browse"><i data-icon="compass"></i><span data-i18n="page.browse">Browse</span><kbd>2</kbd></a>
+      <a href="#library" data-page="library"><i data-icon="database"></i><span data-i18n="page.library">Library</span><kbd>3</kbd></a>
+      <a href="#tasks" data-page="tasks"><i data-icon="download"></i><span data-i18n="page.tasks">Tasks</span><b class="nav-badge" id="nav-tasks-badge"></b><kbd>4</kbd></a>
+      <a href="#watches" data-page="watches"><i data-icon="eye"></i><span data-i18n="page.watches">Watches</span><b class="nav-badge warn" id="nav-watch-badge"></b><kbd>5</kbd></a>
+      <a href="#accounts" data-page="accounts"><i data-icon="user"></i><span data-i18n="page.accounts">Accounts</span><b class="nav-badge warn" id="nav-acc-badge"></b><kbd>6</kbd></a>
+      <a href="#connect" data-page="connect"><i data-icon="plug"></i><span data-i18n="page.connect">Connect AI</span><kbd>7</kbd></a>
+      <a href="#settings" data-page="settings"><i data-icon="gear"></i><span data-i18n="page.settings">Settings</span><kbd>8</kbd></a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="conn" id="conn"><span class="dot"></span><span id="conn-text">…</span></div>
+      <div class="foot-right">
+        <div class="lang-switch" id="lang-switch"><button data-lang="zh">中</button><button data-lang="en">EN</button></div>
+        <button class="icon-btn" id="theme-btn" title="Theme"><i data-icon="moon"></i></button>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div><div class="crumb label" id="page-crumb">TG AGENT</div><h1 id="page-title"></h1></div>
+      <div class="topbar-right">
+        <div class="mini-pill" id="top-active" title="running / queued"><i data-icon="download"></i><span>0 / 0</span></div>
+        <div class="speed-pill"><i data-icon="bolt"></i><span id="top-speed">0 B/s</span></div>
+        <div class="acc-pill" id="top-account"></div>
+      </div>
+    </header>
+
+    <!-- Workflows -->
+    <section class="page" id="page-workflow">
+      <div class="approvals" id="approvals"></div>
+      <div class="wf-layout no-detail" id="wf-layout">
+        <div class="card wf-list">
+          <div class="wf-list-head">
+            <div class="seg small" id="wf-view"><button data-v="flows" class="on" data-i18n="wf.flows">Workflows</button><button data-v="log" data-i18n="wf.log">Log</button></div>
+            <div class="search"><i data-icon="search"></i><input id="wf-q" data-i18n-ph="wf.search" placeholder="Search"></div>
+            <label class="follow"><input type="checkbox" id="wf-follow" checked><span data-i18n="wf.follow">Follow the latest activity</span></label>
+          </div>
+          <div class="wf-items" id="wf-items"></div>
+        </div>
+        <div class="card wf-main" id="wf-main"></div>
+        <div class="card wf-detail" id="wf-detail"></div>
+      </div>
+    </section>
+
+    <!-- Browse -->
+    <section class="page" id="page-browse">
+      <div class="browse">
+        <div class="card dialogs-pane">
+          <div class="pane-tools">
+            <select id="b-account"></select>
+            <div class="search"><i data-icon="search"></i><input id="b-dialog-q" data-i18n-ph="browse.searchDialogs" placeholder="Search joined chats"></div>
+            <div class="search"><i data-icon="link"></i><input id="b-open" data-i18n-ph="browse.open" placeholder="@username or t.me link, Enter"></div>
+            <div class="seg small" id="b-kind"><button data-k="all" class="on" data-i18n="browse.all">All</button><button data-k="channels" data-i18n="browse.channels">Channels</button><button data-k="groups" data-i18n="browse.groups">Groups</button><button data-k="users" data-i18n="browse.users">Private</button></div>
+          </div>
+          <div class="dialog-list" id="b-dialogs"></div>
+        </div>
+        <div class="card chat-pane" id="b-chat"></div>
+      </div>
+    </section>
+
+    <!-- Library -->
+    <section class="page" id="page-library">
+      <div class="lib-layout">
+        <div class="card">
+          <div class="lib-search">
+            <div class="row">
+              <div class="search"><i data-icon="search"></i><input id="l-q" data-i18n-ph="lib.searchPh" placeholder="Search indexed files"></div>
+              <button class="btn primary sm" id="l-go"><i data-icon="search"></i><span data-i18n="lib.search">Search</span></button>
+            </div>
+            <div class="row" id="l-filters"></div>
+          </div>
+          <div id="l-results"></div>
+        </div>
+        <div class="lib-side">
+          <div class="card">
+            <div class="card-head"><h2 data-i18n="lib.indexed">Indexed chats</h2><button class="btn sm" id="l-add-index"><i data-icon="plus"></i><span data-i18n="lib.indexChat">Index a chat</span></button></div>
+            <div id="l-index"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2 data-i18n="lib.compare">Compare chats</h2></div>
+            <div class="cmp-form" id="l-cmp-form"></div>
+          </div>
+        </div>
+      </div>
+      <div class="card" id="l-cmp-result" style="display:none"></div>
+    </section>
+
+    <!-- Tasks -->
+    <section class="page" id="page-tasks">
+      <div class="approvals" id="approvals-2"></div>
+      <div class="card">
+        <div class="card-head">
+          <div class="seg" id="t-filter">
+            <button data-s="active" class="on" data-i18n="tasks.active">Active</button><button data-s="paused" data-i18n="tasks.paused">Paused</button><button data-s="done" data-i18n="tasks.done">Done</button><button data-s="failed" data-i18n="tasks.failed">Failed</button><button data-s="jobs" data-i18n="tasks.jobs">Exports &amp; index</button><button data-s="all" data-i18n="tasks.all">All</button>
+          </div>
+          <div class="btn-row">
+            <button class="btn ghost sm" data-bulk="pause"><i data-icon="pause"></i><span data-i18n="tasks.pauseAll">Pause all</span></button>
+            <button class="btn ghost sm" data-bulk="resume"><i data-icon="play"></i><span data-i18n="tasks.resumeAll">Resume all</span></button>
+            <button class="btn ghost sm" data-bulk="retry"><i data-icon="retry"></i><span data-i18n="tasks.retryFailed">Retry failed</span></button>
+            <button class="btn sm" id="open-dl-dir"><i data-icon="folder"></i><span data-i18n="tasks.openDir">Downloads folder</span></button>
+          </div>
+        </div>
+        <div id="task-list" class="task-list"></div>
+      </div>
+    </section>
+
+    <!-- Watches -->
+    <section class="page" id="page-watches">
+      <div class="card intro" style="margin-bottom:20px">
+        <div class="card-head" style="margin:0"><div><h2 data-i18n="watch.title">Watch chats</h2><p data-i18n="watch.intro">New files that match the filter are downloaded automatically.</p></div>
+          <button class="btn primary" id="w-add"><i data-icon="plus"></i><span data-i18n="watch.add">New watch</span></button></div>
+      </div>
+      <div class="watch-grid" id="w-grid"></div>
+    </section>
+
+    <!-- Accounts -->
+    <section class="page" id="page-accounts">
+      <div class="acc-grid" id="acc-grid"></div>
+    </section>
+
+    <!-- Connect -->
+    <section class="page" id="page-connect">
+      <div class="card intro">
+        <h2 data-i18n="connect.title">Connect TG Agent to your AI tools</h2>
+        <p data-i18n="connect.intro"></p>
+        <div class="label" style="margin-top:16px" data-i18n="connect.token">Access token</div>
+        <div class="token-row" style="margin-top:6px"><code id="c-token">••••••••</code>
+          <button class="btn sm" id="c-reveal" data-i18n="connect.reveal">Show</button>
+          <button class="btn sm ghost" id="c-regen"><i data-icon="refresh"></i><span data-i18n="connect.regen">Regenerate</span></button></div>
+      </div>
+      <div class="connect-grid" id="connect-grid"></div>
+      <div class="card">
+        <div class="card-head"><h2 data-i18n="connect.tools">Tools</h2><span class="label" id="tool-count"></span></div>
+        <div class="tool-list" id="tool-list"></div>
+      </div>
+    </section>
+
+    <!-- Settings -->
+    <section class="page" id="page-settings">
+      <form class="card settings" id="settings-form">
+        <div class="set-group">
+          <div><h3 data-i18n="set.general">General</h3><div class="set-desc" data-i18n="set.generalDesc"></div></div>
+          <div class="set-fields">
+            <label><span data-i18n="set.language">Language</span><select name="language"><option value="zh">中文</option><option value="en">English</option></select></label>
+          </div>
+        </div>
+        <div class="set-group">
+          <div><h3 data-i18n="set.download">Downloads</h3><div class="set-desc" data-i18n="set.downloadDesc"></div></div>
+          <div class="set-fields">
+            <label><span data-i18n="set.dir">Download folder</span><input name="download_dir" required></label>
+            <label><span data-i18n="set.template">File name template</span><input name="name_template" class="mono"><small data-i18n="set.templateHint"></small></label>
+            <div class="row-3">
+              <label><span data-i18n="set.files">Parallel files</span><input name="max_concurrent_files" type="number" min="1" max="8"></label>
+              <label><span data-i18n="set.conns">Connections per file</span><input name="connections_per_file" type="number" min="1" max="16"></label>
+              <label><span data-i18n="set.part">Part size (KB)</span><select name="part_size_kb"><option>128</option><option>256</option><option>512</option><option>1024</option></select></label>
+            </div>
+            <p class="note"><i data-icon="info"></i><span data-i18n="set.note"></span></p>
+          </div>
+        </div>
+        <div class="set-group">
+          <div><h3 data-i18n="set.ai">AI safeguards</h3><div class="set-desc" data-i18n="set.aiDesc"></div></div>
+          <div class="set-fields">
+            <div class="row-3">
+              <label><span data-i18n="set.apSize">Ask above (GB)</span><input name="approval_size_gb" type="number" step="0.1" min="0"></label>
+              <label><span data-i18n="set.apFiles">Ask above (files)</span><input name="approval_files" type="number" min="0"></label>
+              <label><span data-i18n="set.idle">Close untitled workflow after (min)</span><input name="workflow_idle_min" type="number" min="1"></label>
+            </div>
+            <label><span data-i18n="set.wait">Delay between history batches (s)</span><input name="read_wait_time" type="number" step="0.1" min="0"><small data-i18n="set.waitHint"></small></label>
+          </div>
+        </div>
+        <div class="set-group">
+          <div><h3 data-i18n="set.proxy">Default proxy</h3><div class="set-desc" data-i18n="set.proxyDesc"></div></div>
+          <div class="set-fields">
+            <div class="row-3">
+              <label><span data-i18n="set.ptype">Type</span><select name="proxy_type"><option value="" data-i18n="set.direct">Direct</option><option value="socks5">SOCKS5</option><option value="http">HTTP</option></select></label>
+              <label><span data-i18n="set.host">Host</span><input name="proxy_host" placeholder="127.0.0.1"></label>
+              <label><span data-i18n="set.port">Port</span><input name="proxy_port" type="number" placeholder="7890"></label>
+            </div>
+          </div>
+        </div>
+        <div class="form-foot"><button class="btn primary" type="submit"><i data-icon="check"></i><span data-i18n="set.save">Save</span></button></div>
+      </form>
+    </section>
+  </main>
+</div>
+
+<div class="login-screen" id="login-screen">
+  <div class="card login-card">
+    <div class="brand" style="padding:0"><div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3 11.5l18-7.5-3.2 17-5.6-4-3 2.9v-4.7l8-7.6-10.2 6.2z"/></svg></div><div class="brand-name">TG Agent</div></div>
+    <h3 style="margin:0" data-i18n="login.title">Access token required</h3>
+    <p class="muted small" style="margin:0" data-i18n="login.desc"></p>
+    <form id="login-form" style="display:flex;gap:8px"><input id="login-token" class="mono" data-i18n-ph="login.ph" placeholder="token" autocomplete="off"><button class="btn primary" type="submit" data-i18n="login.go">Unlock</button></form>
+  </div>
+</div>
+<div class="modal-back" id="modal-back"><div class="modal" id="modal"></div></div>
+<div class="toasts" id="toasts"></div>
+<script src="/assets/core.js"></script>
+<script src="/assets/workflow.js"></script>
+<script src="/assets/pages.js"></script>
+<script src="/assets/main.js"></script>
+</body>
+</html>

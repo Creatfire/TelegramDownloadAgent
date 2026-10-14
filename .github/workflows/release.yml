@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            name: tg-agent-windows-x64
+          - os: macos-latest
+            name: tg-agent-macos-arm64
+          - os: ubuntu-latest
+            name: tg-agent-linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q
+      - name: Build executable
+        shell: bash
+        run: |
+          SEP=":"; [ "$RUNNER_OS" = "Windows" ] && SEP=";"
+          # --paths: the entry script lives in packaging/, so the project root must be searched for tgagent.
+          # Only the MCP server parts are collected (mcp.cli needs typer, which we don't ship).
+          pyinstaller --noconfirm --onefile --name tg-agent --paths . \
+            --add-data "tgagent/web${SEP}tgagent/web" \
+            --collect-submodules tgagent --collect-submodules mcp.server --collect-submodules mcp.shared \
+            --collect-submodules mcp_types --collect-submodules uvicorn \
+            --copy-metadata mcp --copy-metadata fastapi \
+            packaging/entry.py
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p out
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a "out/${{ matrix.name }}.zip" ./dist/tg-agent.exe README.md LICENSE
+          else
+            tar -czf "out/${{ matrix.name }}.tar.gz" -C dist tg-agent -C .. README.md LICENSE
+          fi
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          generate_release_notes: true
